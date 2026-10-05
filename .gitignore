@@ -1,0 +1,30 @@
+# Python
+.venv/
+__pycache__/
+*.pyc
+*.egg-info/
+
+# Dataset lớn — không nên đẩy lên GitHub
+data/raw/BenchmarkJava/
+data/raw/BenchmarkUtils/
+*.war
+*.class
+target/
+
+# Kết quả thí nghiệm lớn (tùy chọn, có thể bỏ nếu muốn lưu lại)
+data/results/*.json
+
+# Biến môi trường chứa API key — TUYỆT ĐỐI không commit
+.env
+*.env
+
+# IDE
+.vscode/
+*.code-workspace
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Log
+*.log
