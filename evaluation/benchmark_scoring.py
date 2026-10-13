@@ -32,6 +32,12 @@ RESULTS_DIR = Path("data/results")
 FINDINGS_CACHE = RESULTS_DIR / "tier1_findings.json"
 
 TEST_NAME_PATTERN = re.compile(r"(BenchmarkTest\d+)")
+CWE_EQUIVALENT = {"CWE-327": {"CWE-326"}}
+
+def cwe_matches(expected_cwe: str, finding_cwe, use_equivalence: bool) -> bool:
+    if finding_cwe == expected_cwe:
+        return True
+    return use_equivalence and finding_cwe in CWE_EQUIVALENT.get(expected_cwe, set())
 
 
 # ---------- 1. Nạp dữ liệu ----------
@@ -101,22 +107,18 @@ def compute_metrics(c: dict) -> dict:
     }
 
 
-def score_test_level(expected: dict, by_test: dict, strict: bool):
-    """
-    Mỗi test case được tính 1 lần (không đếm số finding).
-    lenient: flagged nếu file có ÍT NHẤT 1 finding bất kỳ.
-    strict : flagged chỉ khi có finding đúng CWE mà test case đó nhắm tới.
-    """
+def score_test_level(expected: dict, by_test: dict, mode: str):
     total = {"TP": 0, "FP": 0, "TN": 0, "FN": 0}
     per_cat = defaultdict(lambda: {"TP": 0, "FP": 0, "TN": 0, "FN": 0})
 
     for test_name, info in expected.items():
         findings = by_test.get(test_name, [])
-        if strict:
-            target_cwe = f"CWE-{info['cwe']}"
-            flagged = any(f.cwe_id == target_cwe for f in findings)
-        else:
+        if mode == "lenient":
             flagged = len(findings) > 0
+        else:
+            target = f"CWE-{info['cwe']}"
+            flagged = any(cwe_matches(target, f.cwe_id, mode == "strict_equiv")
+                          for f in findings)
 
         if info["real"] and flagged:
             label = "TP"
@@ -147,14 +149,18 @@ def label_findings(findings: list[Finding], expected: dict):
         if info is None:
             unmatched += 1
             continue
+        target = f"CWE-{info['cwe']}"
         labeled.append({
             "finding_id": f.finding_id,
             "test_name": m.group(1),
             "category": info["category"],
-            "expected_cwe": f"CWE-{info['cwe']}",
+            "expected_cwe": target,
             "finding_cwe": f.cwe_id,
             "test_is_real_vulnerability": info["real"],
-            "is_true_positive": info["real"] and f.cwe_id == f"CWE-{info['cwe']}",
+            # Đáp án dùng để chấm Reviewer: có áp dụng bảng tương đương
+            "is_true_positive": info["real"] and cwe_matches(target, f.cwe_id, True),
+            # Bản nghiêm ngặt để đối chiếu
+            "is_true_positive_exact": info["real"] and f.cwe_id == target,
         })
     return labeled, unmatched
 
@@ -184,8 +190,9 @@ def main():
     findings = get_findings(args.refresh)
     by_test = group_by_test(findings)
 
-    lenient, lenient_cat = score_test_level(expected, by_test, strict=False)
-    strict, strict_cat = score_test_level(expected, by_test, strict=True)
+    lenient, lenient_cat = score_test_level(expected, by_test, "lenient")
+    strict, strict_cat = score_test_level(expected, by_test, "strict")
+    equiv, equiv_cat = score_test_level(expected, by_test, "strict_equiv")
     labeled, unmatched = label_findings(findings, expected)
 
     true_pos = sum(1 for x in labeled if x["is_true_positive"])
@@ -195,14 +202,17 @@ def main():
           f"| File bị flag: {len(by_test)} | Finding không map được: {unmatched}")
     print_summary("Mức test case - LENIENT (file có finding bất kỳ)", lenient)
     print_summary("Mức test case - STRICT (finding đúng CWE)", strict)
-    print_per_category(strict_cat)
+    print_summary("Mức test case - STRICT + tương đương CWE-326/327", equiv)
+    print_per_category(equiv_cat)
     print(f"\n=== Mức finding (đầu vào của Reviewer) ===")
     print(f"{true_pos}/{len(labeled)} finding là TP thật -> precision đầu vào = {finding_precision}")
 
     RESULTS_DIR.mkdir(parents=True, exist_ok=True)
     (RESULTS_DIR / "tier1_baseline_scores.json").write_text(json.dumps({
         "test_level_lenient": lenient, "test_level_strict": strict,
+        "test_level_strict_equiv": equiv,
         "per_category_strict": strict_cat,
+        "per_category_strict_equiv": equiv_cat,
         "finding_level": {"total": len(labeled), "true_positives": true_pos,
                           "precision": finding_precision},
     }, ensure_ascii=False, indent=2), encoding="utf-8")
