@@ -1,171 +1,48 @@
 {
-  "test_level_lenient": {
-    "TP": 995,
-    "FP": 520,
-    "TN": 805,
-    "FN": 420,
-    "precision": 0.6568,
-    "recall_tpr": 0.7032,
-    "fpr": 0.3925,
-    "f1": 0.6792,
-    "benchmark_score": 0.3107
+  "lenient": {
+    "TP": 1399,
+    "FP": 1148,
+    "TN": 177,
+    "FN": 16,
+    "precision": 0.5493,
+    "recall_tpr": 0.9887,
+    "fpr": 0.8664,
+    "f1": 0.7062,
+    "benchmark_score": 0.1223
   },
-  "test_level_strict": {
-    "TP": 840,
-    "FP": 512,
-    "TN": 813,
-    "FN": 575,
-    "precision": 0.6213,
-    "recall_tpr": 0.5936,
-    "fpr": 0.3864,
-    "f1": 0.6072,
-    "benchmark_score": 0.2072
+  "strict": {
+    "TP": 1361,
+    "FP": 690,
+    "TN": 635,
+    "FN": 54,
+    "precision": 0.6636,
+    "recall_tpr": 0.9618,
+    "fpr": 0.5208,
+    "f1": 0.7853,
+    "benchmark_score": 0.4411
   },
-  "test_level_strict_equiv": {
-    "TP": 970,
-    "FP": 512,
-    "TN": 813,
-    "FN": 445,
-    "precision": 0.6545,
-    "recall_tpr": 0.6855,
-    "fpr": 0.3864,
-    "f1": 0.6697,
-    "benchmark_score": 0.2991
+  "strict_equiv": {
+    "TP": 1361,
+    "FP": 690,
+    "TN": 635,
+    "FN": 54,
+    "precision": 0.6636,
+    "recall_tpr": 0.9618,
+    "fpr": 0.5208,
+    "f1": 0.7853,
+    "benchmark_score": 0.4411
   },
-  "per_category_strict": {
+  "per_cat_strict": {
     "cmdi": {
-      "TP": 112,
-      "FP": 96,
-      "TN": 29,
-      "FN": 14,
-      "precision": 0.5385,
-      "recall_tpr": 0.8889,
-      "fpr": 0.768,
-      "f1": 0.6707,
-      "benchmark_score": 0.1209
-    },
-    "crypto": {
-      "TP": 0,
-      "FP": 0,
-      "TN": 116,
-      "FN": 130,
-      "precision": 0.0,
-      "recall_tpr": 0.0,
-      "fpr": 0.0,
-      "f1": 0.0,
-      "benchmark_score": 0.0
-    },
-    "hash": {
-      "TP": 89,
-      "FP": 0,
-      "TN": 107,
-      "FN": 40,
-      "precision": 1.0,
-      "recall_tpr": 0.6899,
-      "fpr": 0.0,
-      "f1": 0.8165,
-      "benchmark_score": 0.6899
-    },
-    "ldapi": {
-      "TP": 26,
-      "FP": 28,
-      "TN": 4,
-      "FN": 1,
-      "precision": 0.4815,
-      "recall_tpr": 0.963,
-      "fpr": 0.875,
-      "f1": 0.642,
-      "benchmark_score": 0.088
-    },
-    "pathtraver": {
-      "TP": 120,
-      "FP": 106,
-      "TN": 29,
-      "FN": 13,
-      "precision": 0.531,
-      "recall_tpr": 0.9023,
-      "fpr": 0.7852,
-      "f1": 0.6685,
-      "benchmark_score": 0.1171
-    },
-    "securecookie": {
-      "TP": 0,
-      "FP": 0,
-      "TN": 31,
-      "FN": 36,
-      "precision": 0.0,
-      "recall_tpr": 0.0,
-      "fpr": 0.0,
-      "f1": 0.0,
-      "benchmark_score": 0.0
-    },
-    "sqli": {
-      "TP": 234,
-      "FP": 143,
-      "TN": 89,
-      "FN": 38,
-      "precision": 0.6207,
-      "recall_tpr": 0.8603,
-      "fpr": 0.6164,
-      "f1": 0.7211,
-      "benchmark_score": 0.2439
-    },
-    "trustbound": {
-      "TP": 43,
-      "FP": 18,
-      "TN": 25,
-      "FN": 40,
-      "precision": 0.7049,
-      "recall_tpr": 0.5181,
-      "fpr": 0.4186,
-      "f1": 0.5972,
-      "benchmark_score": 0.0995
-    },
-    "weakrand": {
-      "TP": 0,
-      "FP": 0,
-      "TN": 275,
-      "FN": 218,
-      "precision": 0.0,
-      "recall_tpr": 0.0,
-      "fpr": 0.0,
-      "f1": 0.0,
-      "benchmark_score": 0.0
-    },
-    "xpathi": {
-      "TP": 14,
-      "FP": 13,
-      "TN": 7,
-      "FN": 1,
-      "precision": 0.5185,
-      "recall_tpr": 0.9333,
-      "fpr": 0.65,
-      "f1": 0.6667,
-      "benchmark_score": 0.2833
-    },
-    "xss": {
-      "TP": 202,
-      "FP": 108,
-      "TN": 101,
-      "FN": 44,
-      "precision": 0.6516,
-      "recall_tpr": 0.8211,
-      "fpr": 0.5167,
-      "f1": 0.7266,
-      "benchmark_score": 0.3044
-    }
-  },
-  "per_category_strict_equiv": {
-    "cmdi": {
-      "TP": 112,
-      "FP": 96,
-      "TN": 29,
-      "FN": 14,
-      "precision": 0.5385,
-      "recall_tpr": 0.8889,
-      "fpr": 0.768,
-      "f1": 0.6707,
-      "benchmark_score": 0.1209
+      "TP": 126,
+      "FP": 123,
+      "TN": 2,
+      "FN": 0,
+      "precision": 0.506,
+      "recall_tpr": 1.0,
+      "fpr": 0.984,
+      "f1": 0.672,
+      "benchmark_score": 0.016
     },
     "crypto": {
       "TP": 130,
@@ -190,97 +67,220 @@
       "benchmark_score": 0.6899
     },
     "ldapi": {
-      "TP": 26,
-      "FP": 28,
-      "TN": 4,
-      "FN": 1,
-      "precision": 0.4815,
-      "recall_tpr": 0.963,
-      "fpr": 0.875,
-      "f1": 0.642,
-      "benchmark_score": 0.088
+      "TP": 27,
+      "FP": 31,
+      "TN": 1,
+      "FN": 0,
+      "precision": 0.4655,
+      "recall_tpr": 1.0,
+      "fpr": 0.9688,
+      "f1": 0.6353,
+      "benchmark_score": 0.0312
     },
     "pathtraver": {
-      "TP": 120,
-      "FP": 106,
-      "TN": 29,
-      "FN": 13,
-      "precision": 0.531,
-      "recall_tpr": 0.9023,
-      "fpr": 0.7852,
-      "f1": 0.6685,
-      "benchmark_score": 0.1171
+      "TP": 133,
+      "FP": 134,
+      "TN": 1,
+      "FN": 0,
+      "precision": 0.4981,
+      "recall_tpr": 1.0,
+      "fpr": 0.9926,
+      "f1": 0.665,
+      "benchmark_score": 0.0074
     },
     "securecookie": {
-      "TP": 0,
+      "TP": 36,
       "FP": 0,
       "TN": 31,
-      "FN": 36,
-      "precision": 0.0,
-      "recall_tpr": 0.0,
+      "FN": 0,
+      "precision": 1.0,
+      "recall_tpr": 1.0,
       "fpr": 0.0,
-      "f1": 0.0,
-      "benchmark_score": 0.0
+      "f1": 1.0,
+      "benchmark_score": 1.0
     },
     "sqli": {
-      "TP": 234,
-      "FP": 143,
-      "TN": 89,
-      "FN": 38,
-      "precision": 0.6207,
-      "recall_tpr": 0.8603,
-      "fpr": 0.6164,
-      "f1": 0.7211,
-      "benchmark_score": 0.2439
+      "TP": 272,
+      "FP": 210,
+      "TN": 22,
+      "FN": 0,
+      "precision": 0.5643,
+      "recall_tpr": 1.0,
+      "fpr": 0.9052,
+      "f1": 0.7215,
+      "benchmark_score": 0.0948
     },
     "trustbound": {
-      "TP": 43,
-      "FP": 18,
-      "TN": 25,
-      "FN": 40,
-      "precision": 0.7049,
-      "recall_tpr": 0.5181,
-      "fpr": 0.4186,
-      "f1": 0.5972,
-      "benchmark_score": 0.0995
+      "TP": 69,
+      "FP": 29,
+      "TN": 14,
+      "FN": 14,
+      "precision": 0.7041,
+      "recall_tpr": 0.8313,
+      "fpr": 0.6744,
+      "f1": 0.7624,
+      "benchmark_score": 0.1569
     },
     "weakrand": {
-      "TP": 0,
+      "TP": 218,
       "FP": 0,
       "TN": 275,
-      "FN": 218,
-      "precision": 0.0,
-      "recall_tpr": 0.0,
+      "FN": 0,
+      "precision": 1.0,
+      "recall_tpr": 1.0,
       "fpr": 0.0,
-      "f1": 0.0,
-      "benchmark_score": 0.0
+      "f1": 1.0,
+      "benchmark_score": 1.0
     },
     "xpathi": {
-      "TP": 14,
-      "FP": 13,
-      "TN": 7,
-      "FN": 1,
-      "precision": 0.5185,
-      "recall_tpr": 0.9333,
-      "fpr": 0.65,
-      "f1": 0.6667,
-      "benchmark_score": 0.2833
+      "TP": 15,
+      "FP": 19,
+      "TN": 1,
+      "FN": 0,
+      "precision": 0.4412,
+      "recall_tpr": 1.0,
+      "fpr": 0.95,
+      "f1": 0.6122,
+      "benchmark_score": 0.05
     },
     "xss": {
-      "TP": 202,
-      "FP": 108,
-      "TN": 101,
-      "FN": 44,
-      "precision": 0.6516,
-      "recall_tpr": 0.8211,
-      "fpr": 0.5167,
-      "f1": 0.7266,
-      "benchmark_score": 0.3044
+      "TP": 246,
+      "FP": 144,
+      "TN": 65,
+      "FN": 0,
+      "precision": 0.6308,
+      "recall_tpr": 1.0,
+      "fpr": 0.689,
+      "f1": 0.7736,
+      "benchmark_score": 0.311
+    }
+  },
+  "per_cat_strict_equiv": {
+    "cmdi": {
+      "TP": 126,
+      "FP": 123,
+      "TN": 2,
+      "FN": 0,
+      "precision": 0.506,
+      "recall_tpr": 1.0,
+      "fpr": 0.984,
+      "f1": 0.672,
+      "benchmark_score": 0.016
+    },
+    "crypto": {
+      "TP": 130,
+      "FP": 0,
+      "TN": 116,
+      "FN": 0,
+      "precision": 1.0,
+      "recall_tpr": 1.0,
+      "fpr": 0.0,
+      "f1": 1.0,
+      "benchmark_score": 1.0
+    },
+    "hash": {
+      "TP": 89,
+      "FP": 0,
+      "TN": 107,
+      "FN": 40,
+      "precision": 1.0,
+      "recall_tpr": 0.6899,
+      "fpr": 0.0,
+      "f1": 0.8165,
+      "benchmark_score": 0.6899
+    },
+    "ldapi": {
+      "TP": 27,
+      "FP": 31,
+      "TN": 1,
+      "FN": 0,
+      "precision": 0.4655,
+      "recall_tpr": 1.0,
+      "fpr": 0.9688,
+      "f1": 0.6353,
+      "benchmark_score": 0.0312
+    },
+    "pathtraver": {
+      "TP": 133,
+      "FP": 134,
+      "TN": 1,
+      "FN": 0,
+      "precision": 0.4981,
+      "recall_tpr": 1.0,
+      "fpr": 0.9926,
+      "f1": 0.665,
+      "benchmark_score": 0.0074
+    },
+    "securecookie": {
+      "TP": 36,
+      "FP": 0,
+      "TN": 31,
+      "FN": 0,
+      "precision": 1.0,
+      "recall_tpr": 1.0,
+      "fpr": 0.0,
+      "f1": 1.0,
+      "benchmark_score": 1.0
+    },
+    "sqli": {
+      "TP": 272,
+      "FP": 210,
+      "TN": 22,
+      "FN": 0,
+      "precision": 0.5643,
+      "recall_tpr": 1.0,
+      "fpr": 0.9052,
+      "f1": 0.7215,
+      "benchmark_score": 0.0948
+    },
+    "trustbound": {
+      "TP": 69,
+      "FP": 29,
+      "TN": 14,
+      "FN": 14,
+      "precision": 0.7041,
+      "recall_tpr": 0.8313,
+      "fpr": 0.6744,
+      "f1": 0.7624,
+      "benchmark_score": 0.1569
+    },
+    "weakrand": {
+      "TP": 218,
+      "FP": 0,
+      "TN": 275,
+      "FN": 0,
+      "precision": 1.0,
+      "recall_tpr": 1.0,
+      "fpr": 0.0,
+      "f1": 1.0,
+      "benchmark_score": 1.0
+    },
+    "xpathi": {
+      "TP": 15,
+      "FP": 19,
+      "TN": 1,
+      "FN": 0,
+      "precision": 0.4412,
+      "recall_tpr": 1.0,
+      "fpr": 0.95,
+      "f1": 0.6122,
+      "benchmark_score": 0.05
+    },
+    "xss": {
+      "TP": 246,
+      "FP": 144,
+      "TN": 65,
+      "FN": 0,
+      "precision": 0.6308,
+      "recall_tpr": 1.0,
+      "fpr": 0.689,
+      "f1": 0.7736,
+      "benchmark_score": 0.311
     }
   },
   "finding_level": {
-    "total": 1779,
-    "true_positives": 1080,
-    "precision": 0.6071
+    "total": 4084,
+    "true_positives": 1976,
+    "precision": 0.4838
   }
 }

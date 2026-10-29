@@ -32,3 +32,4 @@ Thumbs.db
 # Workspaces for experiment runs (Module 0)
 data/workspace/
 data/results/run_*/
+data/results/benchmark_*/

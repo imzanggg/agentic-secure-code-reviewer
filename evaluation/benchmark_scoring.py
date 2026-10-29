@@ -1,49 +1,58 @@
 """
 benchmark_scoring.py
-Chấm điểm kết quả Tầng 1 (SAST) so với ground truth của OWASP Benchmark.
+Đánh giá toàn diện 3 chế độ trên toàn bộ OWASP Benchmark (~2,740 test cases):
+  1. Semgrep Only
+  2. SpotBugs Only
+  3. Combined Pipeline (Semgrep + SpotBugs với Fuzzy Deduplication)
 
-Đầu ra:
-  - data/results/tier1_baseline_scores.json : các chỉ số baseline (trước Reviewer)
-  - data/results/tier1_findings_labeled.json: nhãn đáp án cho từng Finding
-    (dùng để chấm Reviewer Agent ở Tầng 2)
+Đặc điểm:
+  - Tái sử dụng workspace cố định (data/workspace/run_benchmark) để bỏ qua re-compile.
+  - Lưu kết quả vào folder riêng biệt: data/results/benchmark_<timestamp>/
+  - Chỉ quét 2 lần (Semgrep 1 lần + SpotBugs 1 lần), sau đó gộp findings để đánh giá chế độ Combined.
+  - In bảng so sánh đối đầu (Side-by-side Scorecard) trực tiếp ra màn hình.
 
 Chạy từ thư mục gốc project:
-  python3 -m evaluation.benchmark_scoring            # dùng cache nếu có
-  python3 -m evaluation.benchmark_scoring --refresh  # quét lại Semgrep
+  python3 -m evaluation.benchmark_scoring
+  python3 -m evaluation.benchmark_scoring --clean   # Xóa workspace và compile lại từ đầu
 """
 
 import argparse
 import csv
 import json
 import re
+import uuid
 from collections import defaultdict
+from datetime import datetime
 from pathlib import Path
+from typing import Dict, List, Tuple
 
+from src.preprocessor import BenchmarkPreprocessor
 from src.scanner.aggregator import SASTAggregator
+from src.scanner.base import RawFinding
 from src.scanner.context_extractor import JavaContextExtractor
-from src.scanner.pipeline import ScannerPipeline
 from src.scanner.semgrep_tool import SemgrepTool
+from src.scanner.spotbugs_tool import SpotBugsTool
 from src.schemas import Finding
 
-BENCHMARK_ROOT = Path("data/raw/BenchmarkJava")
-TESTCODE_DIR = BENCHMARK_ROOT / "src/main/java/org/owasp/benchmark/testcode"
-EXPECTED_CSV = BENCHMARK_ROOT / "expectedresults-1.2.csv"
-RESULTS_DIR = Path("data/results")
-FINDINGS_CACHE = RESULTS_DIR / "tier1_findings.json"
+BENCHMARK_RAW_ROOT = Path("data/raw/BenchmarkJava")
+EXPECTED_CSV = BENCHMARK_RAW_ROOT / "expectedresults-1.2.csv"
+GLOBAL_RESULTS_DIR = Path("data/results")
 
 TEST_NAME_PATTERN = re.compile(r"(BenchmarkTest\d+)")
 CWE_EQUIVALENT = {"CWE-327": {"CWE-326"}}
 
-def cwe_matches(expected_cwe: str, finding_cwe, use_equivalence: bool) -> bool:
+SEVERITY_BLOCKLIST = {"INFO"}
+CONFIDENCE_BLOCKLIST = {"LOW"}
+
+
+def cwe_matches(expected_cwe: str, finding_cwe: str, use_equivalence: bool) -> bool:
     if finding_cwe == expected_cwe:
         return True
     return use_equivalence and finding_cwe in CWE_EQUIVALENT.get(expected_cwe, set())
 
 
-# ---------- 1. Nạp dữ liệu ----------
-
 def load_expected_results(csv_path: Path) -> dict:
-    """Đọc đáp án: {test_name: {"category", "real", "cwe"}}"""
+    """Đọc ground truth CSV: {test_name: {"category", "real", "cwe"}}"""
     expected = {}
     with open(csv_path, newline="", encoding="utf-8") as f:
         for row in csv.reader(f):
@@ -58,29 +67,15 @@ def load_expected_results(csv_path: Path) -> dict:
     return expected
 
 
-def get_findings(refresh: bool) -> list[Finding]:
-    """Lấy Finding từ cache; chỉ chạy lại pipeline (Semgrep) khi cần."""
-    if FINDINGS_CACHE.exists() and not refresh:
-        data = json.loads(FINDINGS_CACHE.read_text(encoding="utf-8"))
-        print(f"[INFO] Nạp {len(data)} Finding từ cache: {FINDINGS_CACHE}")
-        return [Finding(**item) for item in data]
-
-    pipeline = ScannerPipeline(
-        aggregator=SASTAggregator(tools=[SemgrepTool(ruleset="p/java")]),
-        context_extractor=JavaContextExtractor(),
-    )
-    findings = pipeline.run(str(TESTCODE_DIR))
-
-    RESULTS_DIR.mkdir(parents=True, exist_ok=True)
-    FINDINGS_CACHE.write_text(
-        json.dumps([f.model_dump() for f in findings], ensure_ascii=False, indent=2),
-        encoding="utf-8",
-    )
-    print(f"[INFO] Đã lưu cache: {FINDINGS_CACHE}")
-    return findings
+def filter_noise(findings: List[RawFinding]) -> List[RawFinding]:
+    """Loại bỏ các finding mức LOW / INFO coi là nhiễu."""
+    return [
+        f for f in findings
+        if f.severity not in SEVERITY_BLOCKLIST and f.confidence not in CONFIDENCE_BLOCKLIST
+    ]
 
 
-def group_by_test(findings: list[Finding]) -> dict[str, list[Finding]]:
+def group_by_test(findings: list) -> Dict[str, list]:
     by_test = defaultdict(list)
     for f in findings:
         m = TEST_NAME_PATTERN.search(f.file_path)
@@ -89,12 +84,10 @@ def group_by_test(findings: list[Finding]) -> dict[str, list[Finding]]:
     return by_test
 
 
-# ---------- 2. Tính điểm ở mức test case ----------
-
 def compute_metrics(c: dict) -> dict:
     tp, fp, tn, fn = c["TP"], c["FP"], c["TN"], c["FN"]
     precision = tp / (tp + fp) if (tp + fp) else 0.0
-    recall = tp / (tp + fn) if (tp + fn) else 0.0          # còn gọi là TPR
+    recall = tp / (tp + fn) if (tp + fn) else 0.0          # TPR
     fpr = fp / (fp + tn) if (fp + tn) else 0.0
     f1 = (2 * precision * recall / (precision + recall)) if (precision + recall) else 0.0
     return {
@@ -103,11 +96,11 @@ def compute_metrics(c: dict) -> dict:
         "recall_tpr": round(recall, 4),
         "fpr": round(fpr, 4),
         "f1": round(f1, 4),
-        "benchmark_score": round(recall - fpr, 4),  # chỉ số chuẩn của OWASP Benchmark
+        "benchmark_score": round(recall - fpr, 4),        # OWASP Score = TPR - FPR
     }
 
 
-def score_test_level(expected: dict, by_test: dict, mode: str):
+def score_test_level(expected: dict, by_test: dict, mode: str) -> Tuple[dict, dict]:
     total = {"TP": 0, "FP": 0, "TN": 0, "FN": 0}
     per_cat = defaultdict(lambda: {"TP": 0, "FP": 0, "TN": 0, "FN": 0})
 
@@ -117,8 +110,7 @@ def score_test_level(expected: dict, by_test: dict, mode: str):
             flagged = len(findings) > 0
         else:
             target = f"CWE-{info['cwe']}"
-            flagged = any(cwe_matches(target, f.cwe_id, mode == "strict_equiv")
-                          for f in findings)
+            flagged = any(cwe_matches(target, f.cwe_id, mode == "strict_equiv") for f in findings)
 
         if info["real"] and flagged:
             label = "TP"
@@ -135,13 +127,7 @@ def score_test_level(expected: dict, by_test: dict, mode: str):
     return compute_metrics(total), {c: compute_metrics(v) for c, v in sorted(per_cat.items())}
 
 
-# ---------- 3. Gán nhãn đáp án cho từng Finding ----------
-
-def label_findings(findings: list[Finding], expected: dict):
-    """
-    Với mỗi Finding, xác định "đáp án đúng" mà Reviewer cần đưa ra:
-      is_true_positive = test case có lỗ hổng thật VÀ finding đúng CWE của test đó.
-    """
+def label_findings(findings: list, expected: dict) -> Tuple[List[dict], int]:
     labeled, unmatched = [], 0
     for f in findings:
         m = TEST_NAME_PATTERN.search(f.file_path)
@@ -150,75 +136,194 @@ def label_findings(findings: list[Finding], expected: dict):
             unmatched += 1
             continue
         target = f"CWE-{info['cwe']}"
+        f_id = getattr(f, "finding_id", str(uuid.uuid4()))
         labeled.append({
-            "finding_id": f.finding_id,
+            "finding_id": f_id,
             "test_name": m.group(1),
             "category": info["category"],
             "expected_cwe": target,
             "finding_cwe": f.cwe_id,
             "test_is_real_vulnerability": info["real"],
-            # Đáp án dùng để chấm Reviewer: có áp dụng bảng tương đương
             "is_true_positive": info["real"] and cwe_matches(target, f.cwe_id, True),
-            # Bản nghiêm ngặt để đối chiếu
             "is_true_positive_exact": info["real"] and f.cwe_id == target,
         })
     return labeled, unmatched
 
 
-# ---------- 4. Báo cáo ----------
+def build_complete_findings(raw_findings: List[RawFinding], extractor: JavaContextExtractor) -> List[Finding]:
+    """Trích xuất AST context cho các finding sau gộp."""
+    complete = []
+    print(f"[INFO] Đang trích xuất AST context cho {len(raw_findings)} finding ...")
+    for raw in raw_findings:
+        ctx_info = None
+        try:
+            ctx_info = extractor.extract_method(raw.file_path, raw.line_start)
+        except Exception:
+            pass
 
-def print_summary(title: str, m: dict):
-    print(f"\n=== {title} ===")
-    print(f"TP={m['TP']}  FP={m['FP']}  TN={m['TN']}  FN={m['FN']}")
-    print(f"Precision={m['precision']}  Recall(TPR)={m['recall_tpr']}  "
-          f"FPR={m['fpr']}  F1={m['f1']}  Benchmark score={m['benchmark_score']}")
+        complete.append(
+            Finding(
+                finding_id=str(uuid.uuid4()),
+                tool_name=raw.tool_name,
+                rule_id=raw.rule_id,
+                cwe_id=raw.cwe_id,
+                file_path=raw.file_path,
+                line_start=raw.line_start,
+                line_end=raw.line_end,
+                message=raw.message,
+                severity=raw.severity,
+                confidence=raw.confidence,
+                remediation_advice=raw.remediation_advice,
+                suggested_fix_snippet=raw.suggested_fix_snippet,
+                references=raw.references,
+                method_name=ctx_info["method_name"] if ctx_info else None,
+                function_context=ctx_info["source"] if ctx_info else None,
+                context_start_line=ctx_info["start_line"] if ctx_info else None,
+                context_end_line=ctx_info["end_line"] if ctx_info else None,
+            )
+        )
+    return complete
 
 
-def print_per_category(per_cat: dict):
-    print(f"\n{'category':<14}{'TP':>5}{'FP':>5}{'TN':>5}{'FN':>5}{'TPR':>8}{'FPR':>8}")
-    for cat, m in per_cat.items():
-        print(f"{cat:<14}{m['TP']:>5}{m['FP']:>5}{m['TN']:>5}{m['FN']:>5}"
-              f"{m['recall_tpr']:>8}{m['fpr']:>8}")
+def print_comparison_table(eval_results: Dict[str, dict]):
+    """In bảng so sánh đối đầu trực quan ra màn hình."""
+    print("\n" + "=" * 90)
+    print("                    OWASP BENCHMARK - TIER 1 EVALUATION SCORECARD")
+    print("=" * 90)
+    print(f"{'Configuration':<24} | {'TPR (Recall)':<12} | {'FPR':<10} | {'OWASP Score':<12} | {'Precision':<10} | {'F1-Score':<8}")
+    print("-" * 90)
+
+    for name, res in eval_results.items():
+        m = res["strict_equiv"]
+        score_str = f"{m['benchmark_score']:+.2%}"
+        tpr_str = f"{m['recall_tpr']:.2%}"
+        fpr_str = f"{m['fpr']:.2%}"
+        prec_str = f"{m['precision']:.2%}"
+        f1_str = f"{m['f1']:.4f}"
+        print(f"{name:<24} | {tpr_str:<12} | {fpr_str:<10} | {score_str:<12} | {prec_str:<10} | {f1_str:<8}")
+
+    print("=" * 90)
+    print("* Chú thích: Metrics hiển thị ở mức Strict Equivalence (chuẩn OWASP Benchmark).")
+    print("  OWASP Benchmark Score = TPR - FPR (+100% là điểm tuyệt đối, 0% là đoán ngẫu nhiên).")
+
+
+def print_category_comparison(eval_results: Dict[str, dict]):
+    """In bảng so sánh chi tiết theo từng danh mục lỗ hổng."""
+    categories = sorted(eval_results["Combined (Tier 1)"]["per_cat_strict_equiv"].keys())
+    print("\n" + "=" * 90)
+    print("                     PER-CATEGORY OWASP SCORES (TPR - FPR)")
+    print("=" * 90)
+    print(f"{'Category':<14} | {'Semgrep Only':<18} | {'SpotBugs Only':<18} | {'Combined Pipeline':<18}")
+    print("-" * 90)
+
+    for cat in categories:
+        s_score = eval_results["Semgrep Only"]["per_cat_strict_equiv"][cat]["benchmark_score"]
+        b_score = eval_results["SpotBugs Only"]["per_cat_strict_equiv"][cat]["benchmark_score"]
+        c_score = eval_results["Combined (Tier 1)"]["per_cat_strict_equiv"][cat]["benchmark_score"]
+
+        print(f"{cat:<14} | {s_score:>+8.2%}           | {b_score:>+8.2%}           | {c_score:>+8.2%}")
+    print("=" * 90)
 
 
 def main():
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--refresh", action="store_true", help="Quét lại bằng Semgrep")
+    parser = argparse.ArgumentParser(description="OWASP Benchmark Tier 1 Three-Mode Evaluation")
+    parser.add_argument("--clean", action="store_true", help="Xóa workspace run_benchmark và chuẩn bị lại từ đầu")
     args = parser.parse_args()
 
+    # 1. Khởi tạo workspace cố định run_benchmark qua Module 0
+    preprocessor = BenchmarkPreprocessor()
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    results_id = f"benchmark_{timestamp}"
+
+    print(f"[INFO] Thiết lập môi trường đánh giá...")
+    ctx = preprocessor.setup_run(
+        test_list=["all"],
+        run_id="run_benchmark",
+        results_id=results_id,
+        resume=not args.clean,
+        clean=args.clean,
+    )
+
     expected = load_expected_results(EXPECTED_CSV)
-    findings = get_findings(args.refresh)
-    by_test = group_by_test(findings)
+    print(f"[INFO] Nạp {len(expected)} test case từ ground truth CSV: {EXPECTED_CSV}")
 
-    lenient, lenient_cat = score_test_level(expected, by_test, "lenient")
-    strict, strict_cat = score_test_level(expected, by_test, "strict")
-    equiv, equiv_cat = score_test_level(expected, by_test, "strict_equiv")
-    labeled, unmatched = label_findings(findings, expected)
+    # 2. PASS 1: Semgrep Only
+    print("\n" + "-" * 50)
+    print("[RUN] Pass 1: Quét Semgrep trên toàn bộ test code...")
+    semgrep = SemgrepTool(ruleset="p/java")
+    semgrep_raw = semgrep.run(ctx.target_path)
+    semgrep_filtered = filter_noise(semgrep_raw)
+    print(f"[INFO] Semgrep tìm thấy: {len(semgrep_raw)} raw -> {len(semgrep_filtered)} sau lọc nhiễu")
 
-    true_pos = sum(1 for x in labeled if x["is_true_positive"])
-    finding_precision = round(true_pos / len(labeled), 4) if labeled else 0.0
+    # 3. PASS 2: SpotBugs Only
+    print("\n" + "-" * 50)
+    print("[RUN] Pass 2: Quét SpotBugs trên toàn bộ test code...")
+    spotbugs = SpotBugsTool()
+    spotbugs_raw = spotbugs.run(ctx.target_path)
+    spotbugs_filtered = filter_noise(spotbugs_raw)
+    print(f"[INFO] SpotBugs tìm thấy: {len(spotbugs_raw)} raw -> {len(spotbugs_filtered)} sau lọc nhiễu")
 
-    print(f"Test case trong CSV: {len(expected)} | Finding: {len(findings)} "
-          f"| File bị flag: {len(by_test)} | Finding không map được: {unmatched}")
-    print_summary("Mức test case - LENIENT (file có finding bất kỳ)", lenient)
-    print_summary("Mức test case - STRICT (finding đúng CWE)", strict)
-    print_summary("Mức test case - STRICT + tương đương CWE-326/327", equiv)
-    print_per_category(equiv_cat)
-    print(f"\n=== Mức finding (đầu vào của Reviewer) ===")
-    print(f"{true_pos}/{len(labeled)} finding là TP thật -> precision đầu vào = {finding_precision}")
+    # 4. PASS 3: Combined (Deduplication qua Aggregator)
+    print("\n" + "-" * 50)
+    print("[RUN] Pass 3: Gộp kết quả Semgrep + SpotBugs qua SASTAggregator...")
+    aggregator = SASTAggregator(tools=[], line_window=4)
+    # Tận dụng findings từ 2 lần quét trước, gộp theo fuzzy window
+    combined_filtered = aggregator._dedup(semgrep_filtered + spotbugs_filtered)
+    print(f"[INFO] Combined findings sau fuzzy dedup: {len(combined_filtered)}")
 
-    RESULTS_DIR.mkdir(parents=True, exist_ok=True)
-    (RESULTS_DIR / "tier1_baseline_scores.json").write_text(json.dumps({
-        "test_level_lenient": lenient, "test_level_strict": strict,
-        "test_level_strict_equiv": equiv,
-        "per_category_strict": strict_cat,
-        "per_category_strict_equiv": equiv_cat,
-        "finding_level": {"total": len(labeled), "true_positives": true_pos,
-                          "precision": finding_precision},
-    }, ensure_ascii=False, indent=2), encoding="utf-8")
-    (RESULTS_DIR / "tier1_findings_labeled.json").write_text(
-        json.dumps(labeled, ensure_ascii=False, indent=2), encoding="utf-8")
-    print(f"\n[INFO] Đã lưu kết quả vào {RESULTS_DIR}/")
+    # 5. Chấm điểm cả 3 cấu hình
+    modes = {
+        "Semgrep Only": semgrep_filtered,
+        "SpotBugs Only": spotbugs_filtered,
+        "Combined (Tier 1)": combined_filtered,
+    }
+
+    eval_results = {}
+    for name, findings_list in modes.items():
+        by_test = group_by_test(findings_list)
+        lenient, lenient_cat = score_test_level(expected, by_test, "lenient")
+        strict, strict_cat = score_test_level(expected, by_test, "strict")
+        equiv, equiv_cat = score_test_level(expected, by_test, "strict_equiv")
+        labeled, unmatched = label_findings(findings_list, expected)
+
+        tp_count = sum(1 for x in labeled if x["is_true_positive"])
+        prec = round(tp_count / len(labeled), 4) if labeled else 0.0
+
+        eval_results[name] = {
+            "lenient": lenient,
+            "strict": strict,
+            "strict_equiv": equiv,
+            "per_cat_strict": strict_cat,
+            "per_cat_strict_equiv": equiv_cat,
+            "finding_level": {"total": len(labeled), "true_positives": tp_count, "precision": prec},
+        }
+
+    # 6. In kết quả tổng hợp ra màn hình
+    print_comparison_table(eval_results)
+    print_category_comparison(eval_results)
+
+    # 7. Trích xuất AST Context cho Combined Findings (chuẩn bị input cho Tier 2 Reviewer Agent)
+    complete_combined = build_complete_findings(combined_filtered, JavaContextExtractor())
+    labeled_combined, _ = label_findings(complete_combined, expected)
+
+    # 8. Lưu toàn bộ kết quả vào data/results/benchmark_<timestamp>/
+    res_path = ctx.results_path
+    (res_path / "benchmark_summary.json").write_text(json.dumps(eval_results, indent=2, ensure_ascii=False))
+    (res_path / "findings_semgrep.json").write_text(json.dumps([f.model_dump() for f in semgrep_filtered], indent=2))
+    (res_path / "findings_spotbugs.json").write_text(json.dumps([f.model_dump() for f in spotbugs_filtered], indent=2))
+    (res_path / "findings_combined.json").write_text(json.dumps([f.model_dump() for f in complete_combined], indent=2))
+    (res_path / "tier1_findings_labeled.json").write_text(json.dumps(labeled_combined, indent=2))
+
+    # Cập nhật bản baseline mới nhất tại data/results/ để tương thích với các script cũ
+    (GLOBAL_RESULTS_DIR / "tier1_baseline_scores.json").write_text(
+        json.dumps(eval_results["Combined (Tier 1)"], indent=2, ensure_ascii=False)
+    )
+    (GLOBAL_RESULTS_DIR / "tier1_findings_labeled.json").write_text(
+        json.dumps(labeled_combined, indent=2, ensure_ascii=False)
+    )
+
+    print(f"\n[INFO] Đã lưu đầy đủ artifacts vào thư mục kết quả: {res_path}")
+    print(f"[INFO] Đã cập nhật {GLOBAL_RESULTS_DIR / 'tier1_baseline_scores.json'}")
 
 
 if __name__ == "__main__":
