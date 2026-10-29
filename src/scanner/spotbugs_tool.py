@@ -1,7 +1,8 @@
 """
 spotbugs_tool.py
 Tích hợp SpotBugs + FindSecBugs plugin thông qua Maven profile 'findsecbugs'.
-Hỗ trợ quét toàn bộ thư mục testcase hoặc quét nhanh 1 file đơn lẻ.
+Hỗ trợ quét toàn bộ thư mục testcase hoặc quét nhanh 1 file đơn lẻ,
+tự động lọc bỏ các finding từ thư mục scaffolding/helpers.
 """
 
 import subprocess
@@ -38,7 +39,7 @@ class SpotBugsTool(SASTTool):
         # 2. Parse XML kết quả
         xml_path = pom_dir / "target" / "spotbugsXml.xml"
         if not xml_path.exists():
-            # Dự phòng tên file xml mặc định khác của plugin
+            # Dự phòng tên file XML mặc định khác của plugin
             fallback = pom_dir / "target" / "spotbugs.xml"
             if fallback.exists():
                 xml_path = fallback
@@ -46,7 +47,7 @@ class SpotBugsTool(SASTTool):
                 print(f"[WARN] Không tìm thấy file kết quả SpotBugs XML tại {xml_path}")
                 return []
 
-        return self._parse_spotbugs_xml(xml_path, pom_dir)
+        return self._parse_spotbugs_xml(xml_path, pom_dir, target)
 
     def _find_pom_dir(self, start_path: Path) -> Optional[Path]:
         current = start_path if start_path.is_dir() else start_path.parent
@@ -85,7 +86,7 @@ class SpotBugsTool(SASTTool):
         if res.returncode != 0 and not (pom_dir / "target" / "spotbugsXml.xml").exists():
             print(f"[ERROR] Maven SpotBugs thất bại:\nSTDOUT:\n{res.stdout}\nSTDERR:\n{res.stderr}")
 
-    def _parse_spotbugs_xml(self, xml_path: Path, pom_dir: Path) -> List[RawFinding]:
+    def _parse_spotbugs_xml(self, xml_path: Path, pom_dir: Path, target_path: Path) -> List[RawFinding]:
         findings: List[RawFinding] = []
         try:
             tree = ET.parse(xml_path)
@@ -96,7 +97,6 @@ class SpotBugsTool(SASTTool):
 
         # Nguồn source gốc của Benchmark: src/main/java
         source_root = pom_dir / "src" / "main" / "java"
-
         priority_map = {"1": "HIGH", "2": "MEDIUM", "3": "LOW"}
 
         for bug in root.findall("BugInstance"):
@@ -113,8 +113,12 @@ class SpotBugsTool(SASTTool):
             if not rel_source_path:
                 continue
 
-            # Ánh xạ về đường dẫn file .java thật trên disk để Tree-sitter AST có thể đọc được
-            full_file_path = str(source_root / rel_source_path)
+            # Ánh xạ về đường dẫn file .java thật trên disk
+            full_file_path = (source_root / rel_source_path).resolve()
+
+            # Lọc bỏ các file nằm ngoài phạm vi target_path (ví dụ: các file helpers/)
+            if not str(full_file_path).startswith(str(target_path)):
+                continue
 
             try:
                 line_start = int(source_line.get("start", 1))
@@ -138,7 +142,7 @@ class SpotBugsTool(SASTTool):
                     tool_name=self.name,
                     rule_id=bug.get("type", "UNKNOWN_RULE"),
                     cwe_id=cwe_id,
-                    file_path=full_file_path,
+                    file_path=str(full_file_path),
                     line_start=line_start,
                     line_end=line_end,
                     message=message.strip(),

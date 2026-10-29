@@ -28,3 +28,7 @@ Thumbs.db
 
 # Log
 *.log
+
+# Workspaces for experiment runs (Module 0)
+data/workspace/
+data/results/run_*/
