@@ -1,44 +1,90 @@
-"""aggregator.py: chạy nhiều SAST tool, dedup finding trùng, gộp remediation advice."""
+"""
+aggregator.py: chạy nhiều SAST tool, dedup fuzzy finding trùng dòng, gộp remediation advice.
+"""
 
 from collections import defaultdict
+from pathlib import Path
+from typing import List
 from .base import SASTTool, RawFinding
 
 
 class SASTAggregator:
-    def __init__(self, tools: list[SASTTool]):
+    def __init__(self, tools: List[SASTTool], line_window: int = 4):
         self.tools = tools
+        self.line_window = line_window
 
-    def run_all(self, target_path: str) -> list[RawFinding]:
+    def run_all(self, target_path: str) -> List[RawFinding]:
         all_findings = []
         for tool in self.tools:
             try:
                 all_findings.extend(tool.run(target_path))
             except Exception as e:
                 print(f"[WARN] Tool '{tool.name}' lỗi khi chạy: {e}")
-                # Không để 1 tool lỗi làm hỏng toàn bộ pipeline — ghi log, bỏ qua, chạy tiếp
 
         return self._dedup(all_findings)
 
-    def _dedup(self, findings: list[RawFinding]) -> list[RawFinding]:
-        """Gộp các finding cùng vị trí/CWE do nhiều tool cùng phát hiện."""
+    def _normalize_path(self, path_str: str) -> str:
+        """Đảm bảo đồng nhất đường dẫn để so khớp."""
+        return str(Path(path_str).resolve())
+
+    def _dedup(self, findings: List[RawFinding]) -> List[RawFinding]:
+        """
+        Deduplication theo logic:
+        1. Gom nhóm theo (file_path chuẩn hóa, exact cwe_id).
+        2. Nếu cùng file và cùng CWE, cho phép fuzzy window (+- 4 dòng).
+        3. Ưu tiên Semgrep làm gốc (giữ line_start/end và fix snippet).
+        4. Gộp remediation advice và cập nhật tool_name = 'semgrep+spotbugs'.
+        """
+        # Nhóm theo (normalized_path, cwe_id)
         groups = defaultdict(list)
         for f in findings:
-            key = (f.file_path, f.line_start, f.cwe_id)
+            key = (self._normalize_path(f.file_path), f.cwe_id)
             groups[key].append(f)
 
-        merged = []
-        for group in groups.values():
-            if len(group) == 1:
-                merged.append(group[0])
+        merged_results: List[RawFinding] = []
+
+        for (norm_path, cwe_id), items in groups.items():
+            # Tách findings theo công cụ
+            semgrep_items = [f for f in items if "semgrep" in f.tool_name]
+            spotbugs_items = [f for f in items if "spotbugs" in f.tool_name]
+
+            # Những tool khác hoặc trường hợp chỉ có 1 trong 2 công cụ
+            if not semgrep_items or not spotbugs_items:
+                merged_results.extend(items)
                 continue
 
-            primary = group[0].model_copy()
-            primary.tool_name = "+".join(sorted({g.tool_name for g in group}))
+            used_spotbugs = set()
 
-            # Gộp remediation advice từ nhiều tool, loại trùng, giữ tất cả góc nhìn
-            advices = [g.remediation_advice for g in group if g.remediation_advice]
-            primary.remediation_advice = " | ".join(dict.fromkeys(advices))
+            for semgrep_f in semgrep_items:
+                matched_spotbugs = None
 
-            merged.append(primary)
+                # Tìm SpotBugs finding gần nhất trong khoảng +- line_window
+                for sb_f in spotbugs_items:
+                    if id(sb_f) in used_spotbugs:
+                        continue
+                    if abs(semgrep_f.line_start - sb_f.line_start) <= self.line_window:
+                        matched_spotbugs = sb_f
+                        used_spotbugs.add(id(sb_f))
+                        break
 
-        return merged
+                if matched_spotbugs:
+                    # Gộp: Lấy Semgrep làm primary
+                    primary = semgrep_f.model_copy()
+                    primary.tool_name = "semgrep+spotbugs"
+
+                    # Gộp lời khuyên sửa lỗi
+                    advices = [
+                        adv for adv in [semgrep_f.remediation_advice, matched_spotbugs.remediation_advice]
+                        if adv
+                    ]
+                    primary.remediation_advice = " | ".join(dict.fromkeys(advices))
+                    merged_results.append(primary)
+                else:
+                    merged_results.append(semgrep_f)
+
+            # Thêm các finding của SpotBugs không tìm được cặp ghép với Semgrep
+            for sb_f in spotbugs_items:
+                if id(sb_f) not in used_spotbugs:
+                    merged_results.append(sb_f)
+
+        return merged_results
