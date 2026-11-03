@@ -35,3 +35,5 @@ data/results/run_*/
 data/results/benchmark_*/
 # Kết quả chạy Reviewer (jsonl, meta, scores)
 data/results/reviewer/
+results_c7/
+*.zip
