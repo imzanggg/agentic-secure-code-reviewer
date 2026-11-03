@@ -33,3 +33,5 @@ Thumbs.db
 data/workspace/
 data/results/run_*/
 data/results/benchmark_*/
+# Kết quả chạy Reviewer (jsonl, meta, scores)
+data/results/reviewer/
