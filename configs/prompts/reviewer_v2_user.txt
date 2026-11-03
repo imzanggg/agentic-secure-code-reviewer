@@ -1,0 +1,12 @@
+SAST warning
+- Rule: {rule_id}
+- Weakness: {cwe_id}
+- Tool message: {message}
+- Flagged lines: {line_start}-{line_end} (marked with >> below)
+
+Java method containing the flagged lines (numbers are file line numbers):
+```java
+{numbered_code}
+```
+
+Return JSON with fields: reasoning, verdict (TP or FP), confidence (low, medium, high).

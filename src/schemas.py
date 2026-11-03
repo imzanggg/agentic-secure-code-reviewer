@@ -4,8 +4,8 @@ schemas.py
 không thuộc riêng tầng nào. Đây là "hợp đồng" giữa các tầng.
 """
 
-from typing import Optional, List
-from pydantic import BaseModel
+from typing import Optional, List, Literal
+from pydantic import BaseModel, Field
 
 
 class Finding(BaseModel):
@@ -35,3 +35,22 @@ class Finding(BaseModel):
     function_context: Optional[str] = None
     context_start_line: Optional[int] = None
     context_end_line: Optional[int] = None
+    callee_context: Optional[str] = None
+
+class ReviewerLLMOutput(BaseModel):
+    reasoning: str
+    verdict: Literal["TP", "FP"]
+    confidence: Literal["low", "medium", "high"]
+
+
+class Verdict(BaseModel):
+    finding_id: str
+    verdict: Literal["TP", "FP"]
+    confidence: Literal["low", "medium", "high"]
+    reasoning: str
+    source: Literal["local_llm", "api_fallback", "fail_open", "rule_based"] = "local_llm"
+    model: Optional[str] = None
+    latency_sec: Optional[float] = None
+    prompt_tokens: Optional[int] = None
+    completion_tokens: Optional[int] = None
+    raw_output: Optional[str] = None

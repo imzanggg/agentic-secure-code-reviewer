@@ -1,0 +1,11 @@
+SAST warning
+- Rule: {rule_id}
+- Weakness: {cwe_id}
+- Flagged lines: {line_start}-{line_end} (marked with >> below)
+
+Java method containing the flagged lines (numbers are file line numbers):
+```java
+{numbered_code}
+```
+
+Write your analysis, then the final DECISION line.
