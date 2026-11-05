@@ -35,7 +35,7 @@ def parse_text_output(text: str):
                              confidence=last.group(2).lower())
             
 WEAK_RULE_RE = re.compile(
-    r"\.(des-is-deprecated|desede-is-deprecated|use-of-md5|use-of-sha1)$")
+    r"(\.(des-is-deprecated|desede-is-deprecated|use-of-md5|use-of-sha1)|^DES_USAGE)$")
 WEAK_ALGO_RE = re.compile(
     r'\.getInstance\(\s*"(DES|DESede|MD5|SHA-?1)\b', re.IGNORECASE)
 
