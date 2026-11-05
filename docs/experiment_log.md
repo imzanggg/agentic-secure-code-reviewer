@@ -45,3 +45,11 @@
 - Không thêm luật cho PREDICTABLE_RANDOM và INSECURE_COOKIE: để LLM xử lý ở D1; nếu loại nhầm thì quyết định thêm luật ở D2 và ghi rõ là sửa sau khi xem dev.
 - Hạn chế đã biết: dòng '>>' của SpotBugs có thể lệch so với sink; prompt v3callee_text không có message nên finding SpotBugs chỉ có rule_id + CWE; confidence của SpotBugs không mang thông tin riêng.
 - Cấu hình D1 dự kiến: qwen2.5-coder:14b (Kaggle T4), prompt reviewer_v3callee_text, --mode text, --rule-triage, findings = tier1_findings_callee_D.json, tag d1. Chỉ chạy một lần, không dò lại ca fail-open.
+
+### D-series: TIÊU CHÍ CHẤP NHẬN ĐÃ KHÓA (ghi và commit TRƯỚC khi chạy tập test; chạy test đúng MỘT lần)
+- Cấu hình đóng băng = D1: qwen2.5-coder:14b (digest 9ec8897f747e), temperature 0, seed 42, num_ctx 8192, num_predict 500; prompt reviewer_v3callee_text; parser v2; --rule-triage với WEAK_RULE_RE như commit 0871c29; fail-open như hiện tại. Đầu vào: Tầng 1 Combined (đã loại cứng priority 3 của SpotBugs), callee build bằng --split test. KHÔNG áp luật hậu nghiệm D2 (PREDICTABLE_RANDOM, nới DES_USAGE).
+- Phạm vi: toàn bộ finding của tập test (2454 test case), chạy nhiều phiên Kaggle cùng một tag, resume; không chạy lại ca fail-open riêng lẻ; không chấm điểm từng phần giữa các phiên.
+- Đơn vị đếm: finding (chính), kèm mức test case. Báo cáo hai mẫu số: (a) toàn bộ finding; (b) bỏ finding thuộc test case có lỗi nhưng lệch CWE kỳ vọng. Tiêu chí quyết định dùng mẫu số (b) cho "loại nhiễu" và "precision"; mẫu (a) chỉ đối chiếu.
+- Ngưỡng đạt: (1) giữ lỗi thật >= 85% (finding) [BẮT BUỘC; dưới ngưỡng thì kết luận không đạt dù các tiêu chí khác đạt]; (2) loại nhiễu >= 50% (mẫu b); (3) precision sau >= precision trước + 0,10 (mẫu b); (4) fail-open < 5%; (5) TPR mức test case >= 0,85; (6) Bench mức test case cao hơn baseline Tầng 1 trên cùng test case.
+- Báo cáo: mọi tiêu chí kể cả không đạt, kèm Wilson 95%. Kết quả âm tính ghi nguyên văn, không chỉnh cấu hình rồi chạy lại.
+- Hạn chế nêu trong báo cáo: nhãn theo (test case + CWE); priority 3 SpotBugs bị loại cứng; luật thuật toán yếu thiết kế sau khi xem dev; một seed, một lần chạy.
