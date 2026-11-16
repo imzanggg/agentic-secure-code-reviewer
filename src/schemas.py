@@ -54,3 +54,19 @@ class Verdict(BaseModel):
     prompt_tokens: Optional[int] = None
     completion_tokens: Optional[int] = None
     raw_output: Optional[str] = None
+
+class Patch(BaseModel):
+    finding_id: str
+    # Khối thay thế rõ ràng, dễ áp vào file gốc bằng script
+    original_snippet: str          # đoạn code gốc bị thay (để kiểm tra khớp trước khi áp)
+    fixed_snippet: str             # đoạn code đã sửa
+    line_start: Optional[int] = None   # vị trí khối bị thay, điền sau khi apply_patch tìm thấy
+    line_end: Optional[int] = None
+    explanation: Optional[str] = None
+    iteration: int = 1             # vòng lặp thứ mấy (cho single-shot vs multi-loop)
+    source: Literal["local_llm", "api_fallback", "fail_open"] = "local_llm"
+    model: Optional[str] = None
+    latency_sec: Optional[float] = None
+    prompt_tokens: Optional[int] = None
+    completion_tokens: Optional[int] = None
+    raw_output: Optional[str] = None
