@@ -52,7 +52,7 @@ def finding_level(verdicts, labels):
         key = ("kept" if keep else "dropped") + ("_real" if real else "_noise")
         cm[key] += 1
         by_cat[lab["category"]][key] += 1
-        if v["source"] != "fail_open":
+        if v["source"] not in ("fail_open", "rule_based"):
             by_conf[v["confidence"]]["n"] += 1
             by_conf[v["confidence"]]["correct"] += int(keep == real)
         if keep != real:
