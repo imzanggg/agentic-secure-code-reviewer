@@ -37,3 +37,11 @@ data/results/benchmark_*/
 data/results/reviewer/
 results_c7/
 *.zip
+data/results/tier1_semgrep_only/
+data/results/*.jsonl
+data/results/*.old.json
+data/results/m2_*
+data/results/wr_false_*
+data/results/fail_open_subset.json
+data/raw/
+viewer/data/raw/

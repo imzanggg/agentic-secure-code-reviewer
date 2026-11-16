@@ -38,6 +38,9 @@ WEAK_RULE_RE = re.compile(
     r"(\.(des-is-deprecated|desede-is-deprecated|use-of-md5|use-of-sha1)|^DES_USAGE)$")
 WEAK_ALGO_RE = re.compile(
     r'\.getInstance\(\s*"(DES|DESede|MD5|SHA-?1)\b', re.IGNORECASE)
+# Weak random: rule_id của SpotBugs/FindSecBugs là PREDICTABLE_RANDOM (đã xác nhận trên m2_try3)
+WEAKRAND_RULE_RE = re.compile(r"^PREDICTABLE_RANDOM$")
+WEAKRAND_SRC_RE = re.compile(r"\bnew\s+(?:java\.util\.)?Random\s*\(|\bMath\.random\s*\(")
 
 def flagged_text(f: Finding) -> str:
     """Nguyên văn các dòng bị cảnh báo, lấy từ function_context."""
@@ -49,17 +52,23 @@ def flagged_text(f: Finding) -> str:
 
 
 def rule_triage(f: Finding):
-    """Trả tên thuật toán yếu nếu finding thuộc nhóm luật trên và dòng lỗi có literal
-    thuật toán yếu; ngược lại None (để LLM xử lý)."""
-    if not WEAK_RULE_RE.search(f.rule_id):
-        return None
-    m = WEAK_ALGO_RE.search(flagged_text(f))
-    return m.group(1) if m else None
+    """Trả chuỗi lý do nếu finding thuộc nhóm luật và dòng lỗi có literal yếu; ngược lại None
+    (để LLM xử lý). Chỉ nhìn dòng bị cảnh báo, nên SecureRandom không khớp."""
+    text = flagged_text(f)
+    if WEAK_RULE_RE.search(f.rule_id):
+        m = WEAK_ALGO_RE.search(text)
+        if m:
+            return f"dòng bị cảnh báo gọi getInstance với thuật toán yếu '{m.group(1)}' (literal)"
+    elif WEAKRAND_RULE_RE.search(f.rule_id):
+        m = WEAKRAND_SRC_RE.search(text)
+        if m:
+            return f"dòng bị cảnh báo dùng bộ sinh ngẫu nhiên đoán được '{m.group(0).strip()}' (literal)"
+    return None
 
 
 class ReviewerAgent:
     def __init__(self, client, prompt_dir: str = "configs/prompts",
-                 prompt_version: str = "reviewer_v1", source_label: str = "local_llm",
+                 prompt_version: str = "reviewer_v3callee_text", source_label: str = "local_llm",
                  output_mode: str = "json", use_rule_triage: bool = False):
         if output_mode not in ("json", "text"):
             raise ValueError("output_mode phải là 'json' hoặc 'text'")
@@ -77,12 +86,11 @@ class ReviewerAgent:
         if not finding.function_context:
             return self._fail_open(finding, "no_context")
         if self.use_rule_triage:
-            algo = rule_triage(finding)
-            if algo:
+            reason = rule_triage(finding)
+            if reason:
                 return Verdict(
                     finding_id=finding.finding_id, verdict="TP", confidence="high",
-                    reasoning=f"RULE: dòng bị cảnh báo gọi getInstance với thuật toán yếu "
-                              f"'{algo}' (literal); không cần suy luận luồng dữ liệu",
+                    reasoning=f"RULE: {reason}; không cần suy luận luồng dữ liệu",
                     source="rule_based", model=None)
 
         user_prompt = self._build_user_prompt(finding)

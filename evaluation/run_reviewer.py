@@ -39,7 +39,7 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--model", default="qwen2.5-coder:3b")
     ap.add_argument("--split", choices=["dev", "test"], default="dev")
-    ap.add_argument("--prompt", default="reviewer_v1")
+    ap.add_argument("--prompt", default="reviewer_v3callee_text")
     ap.add_argument("--mode", choices=["json", "text"], default="json")
     ap.add_argument("--limit", type=int, default=None)
     ap.add_argument("--tag", default="", help="hậu tố tên file kết quả, ví dụ c5")
