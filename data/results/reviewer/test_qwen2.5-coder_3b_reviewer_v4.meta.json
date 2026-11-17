@@ -1,0 +1,18 @@
+{
+  "model": "qwen2.5-coder:3b",
+  "model_digest": "f72c60cabf6237b07f6e632b2c48d533cef25eda2efbd34bed21c5e9c01e6225",
+  "prompt_version": "reviewer_v4",
+  "split": "test",
+  "temperature": 0.0,
+  "seed": 42,
+  "num_ctx": 8192,
+  "n_findings": 3653,
+  "last_started": "2026-11-17T14:40:51",
+  "output_mode": "text",
+  "num_predict": 500,
+  "tag": "",
+  "parser": "v2_relaxed_regex",
+  "repeat_penalty": null,
+  "repeat_last_n": null,
+  "findings_file": "data/results/tier1_findings.json"
+}
