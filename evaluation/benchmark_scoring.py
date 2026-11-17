@@ -180,6 +180,7 @@ def build_complete_findings(raw_findings: List[RawFinding], extractor: JavaConte
                 function_context=ctx_info["source"] if ctx_info else None,
                 context_start_line=ctx_info["start_line"] if ctx_info else None,
                 context_end_line=ctx_info["end_line"] if ctx_info else None,
+                callee_context=ctx_info.get("callee_context") if ctx_info else None
             )
         )
     return complete
@@ -320,6 +321,10 @@ def main():
     )
     (GLOBAL_RESULTS_DIR / "tier1_findings_labeled.json").write_text(
         json.dumps(labeled_combined, indent=2, ensure_ascii=False)
+    )
+    (GLOBAL_RESULTS_DIR / "tier1_findings.json").write_text(
+    json.dumps([f.model_dump() for f in complete_combined], indent=2, ensure_ascii=False),
+    encoding="utf-8",
     )
 
     print(f"\n[INFO] Đã lưu đầy đủ artifacts vào thư mục kết quả: {res_path}")

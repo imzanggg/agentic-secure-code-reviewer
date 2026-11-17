@@ -52,6 +52,7 @@ class ScannerPipeline:
                 function_context=context["source"] if context else None,
                 context_start_line=context["start_line"] if context else None,
                 context_end_line=context["end_line"] if context else None,
+                callee_context=context.get("callee_context") if context else None,
             ))
 
         print(f"[INFO] Pipeline: {len(raw_findings)} raw -> {len(filtered)} sau loc "

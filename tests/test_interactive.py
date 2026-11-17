@@ -15,6 +15,9 @@ from src.scanner.spotbugs_tool import SpotBugsTool
 from src.scanner.aggregator import SASTAggregator
 from src.scanner.context_extractor import JavaContextExtractor
 from src.scanner.pipeline import ScannerPipeline
+from src.agents.llm_client import OllamaClient
+from src.agents.reviewer import ReviewerAgent
+from src.graph.workflow import build_review_graph
 
 
 def run_headless(args):
@@ -45,8 +48,10 @@ def run_interactive():
     print("  [3] SAST Aggregator          (Both tools + Fuzzy Deduplication)")
     print("  [4] AST Context Extractor    (Tree-sitter Java method extraction)")
     print("  [5] Entire Tier 1 Pipeline   (Full scan -> Dedup -> Context)")
-    mod_choice = input("\nSelect option [1-5] (Default: 5): ").strip()
-    module_mapping = {"1": "semgrep", "2": "spotbugs", "3": "aggregator", "4": "ast", "5": "pipeline"}
+    print("  [6] Full LangGraph (Tier 1 -> Tier 2 Reviewer)")
+    
+    mod_choice = input("\nSelect option [1-6] (Default: 5): ").strip()
+    module_mapping = {"1": "semgrep", "2": "spotbugs", "3": "aggregator", "4": "ast", "5": "pipeline", "6": "graph"}
     module = module_mapping.get(mod_choice, "pipeline")
 
     # STEP 2: Chọn Scope
@@ -150,6 +155,37 @@ def execute_module(module: str, ctx):
         )
         results = pipeline.run(ctx.target_path)
 
+    elif module == "graph":
+        pipeline = ScannerPipeline(
+            aggregator=SASTAggregator(tools=[semgrep, spotbugs], line_window=4),
+            context_extractor=JavaContextExtractor(),
+        )
+        reviewer = ReviewerAgent(
+            client=OllamaClient(),
+            prompt_version="reviewer_v4",
+            output_mode="text",
+            use_rule_triage=True,
+        )
+        app = build_review_graph(pipeline, reviewer)
+        final_state = app.invoke({"target_path": ctx.target_path})
+
+        findings = final_state["findings"]
+        verdicts = final_state["verdicts"]
+        tp_findings = final_state["tp_findings"]
+
+        out_dir = Path(ctx.results_dir)
+        (out_dir / "pipeline_findings.json").write_text(
+            json.dumps([f.model_dump() for f in findings], indent=2, ensure_ascii=False), encoding="utf-8"
+        )
+        (out_dir / "reviewer_verdicts.json").write_text(
+            json.dumps([v.model_dump() for v in verdicts], indent=2, ensure_ascii=False), encoding="utf-8"
+        )
+        print(f"\n=== GRAPH SUMMARY: {len(findings)} findings -> {len(tp_findings)} TP kept ===")
+        if verdicts:
+            print("\nFirst verdict preview:")
+            print(verdicts[0].model_dump_json(indent=2))
+        return
+
     # Lưu kết quả và in báo cáo
     if module != "ast":
         out_file = Path(ctx.results_dir) / f"{module}_findings.json"
@@ -167,7 +203,11 @@ def execute_module(module: str, ctx):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Agentic Code Reviewer Test Runner")
-    parser.add_argument("--module", choices=["semgrep", "spotbugs", "aggregator", "ast", "pipeline"], help="Module to test")
+    parser.add_argument(
+        "--module",
+        choices=["semgrep", "spotbugs", "aggregator", "ast", "pipeline", "graph"],
+        help="Module to test",
+    )
     parser.add_argument("--test", "-t", help="Specific test name (e.g. BenchmarkTest00001)")
     parser.add_argument("--category", "-c", help="Benchmark category (e.g. sqli)")
     parser.add_argument("--limit", "-n", type=int, help="Limit number of test cases")

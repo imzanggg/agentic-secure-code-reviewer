@@ -1,11 +1,7 @@
 """
 score_reviewer.py
 Chấm điểm Reviewer cho một lần chạy (model + prompt + split).
-
-Mức finding : Reviewer có giữ đúng finding thật và loại đúng finding nhiễu không?
-Mức test case: gộp ngược lên test case, so với baseline "giữ hết" TRÊN CÙNG tập con.
-
-Chạy: python3 -m evaluation.score_reviewer --model qwen2.5-coder:3b --split dev
+Bao gồm: Finding-level (Precision/Recall/F1), Discrimination (Fisher/OR), và Test-level.
 """
 
 import argparse
@@ -14,8 +10,11 @@ import math
 from collections import defaultdict
 from pathlib import Path
 
+from scipy.stats import fisher_exact
+
 from evaluation.benchmark_scoring import (
-    EXPECTED_CSV, compute_metrics, cwe_matches, load_expected_results)
+    EXPECTED_CSV, compute_metrics, cwe_matches, load_expected_results
+)
 from evaluation.run_reviewer import safe
 
 SPLIT = Path("data/splits/dev_test_split.json")
@@ -24,7 +23,6 @@ RUN_DIR = Path("data/results/reviewer")
 
 
 def wilson(k, n, z=1.96):
-    """Khoảng tin cậy 95% (Wilson) cho một tỷ lệ."""
     if n == 0:
         return None, None
     p = k / n
@@ -39,6 +37,38 @@ def rate(k, n):
     return {"k": k, "n": n, "value": round(k / n, 4) if n else None, "ci95": [lo, hi]}
 
 
+def f1_score(p, r):
+    if not p or not r or (p + r) == 0:
+        return 0.0
+    return round(2 * p * r / (p + r), 4)
+
+
+def odds_ci(a, b, c, d, z=1.96):
+    a, b, c, d = (x + 0.5 for x in (a, b, c, d))
+    lor = math.log(a * d / (b * c))
+    se = math.sqrt(1 / a + 1 / b + 1 / c + 1 / d)
+    return math.exp(lor - z * se), math.exp(lor + z * se)
+
+
+def print_discrimination(title, rows, labels):
+    a = b = c = d = 0  # a: loại nhiễu, b: loại thật, c: giữ nhiễu, d: giữ thật
+    for r in rows:
+        real = labels[r["finding_id"]]["is_true_positive"]
+        drop = r["verdict"] == "FP"
+        if drop and not real: a += 1
+        elif drop and real: b += 1
+        elif not drop and not real: c += 1
+        else: d += 1
+    print(f"  {title} (n={a + b + c + d}):")
+    if min(a + c, b + d) == 0:
+        print("    Không đủ dữ liệu (thiếu finding nhiễu hoặc finding thật).")
+        return
+    odds, p = fisher_exact([[a, b], [c, d]])
+    lo, hi = odds_ci(a, b, c, d)
+    print(f"    bị loại | nhiễu {a}/{a + c} ({a/(a+c):.1%}) vs thật {b}/{b + d} ({b/(b+d):.1%})")
+    print(f"    OR={odds:.2f} (95%CI {lo:.2f}-{hi:.2f}) p={p:.3f}")
+
+
 def finding_level(verdicts, labels):
     cm = {"kept_real": 0, "kept_noise": 0, "dropped_real": 0, "dropped_noise": 0}
     by_cat = defaultdict(lambda: dict.fromkeys(cm, 0))
@@ -47,7 +77,7 @@ def finding_level(verdicts, labels):
 
     for v in verdicts:
         lab = labels[v["finding_id"]]
-        real = lab["is_true_positive"]            # đáp án (có áp dụng CWE tương đương)
+        real = lab["is_true_positive"]
         keep = v["verdict"] == "TP"
         key = ("kept" if keep else "dropped") + ("_real" if real else "_noise")
         cm[key] += 1
@@ -68,11 +98,18 @@ def finding_level(verdicts, labels):
     n_real = cm["kept_real"] + cm["dropped_real"]
     n_noise = cm["kept_noise"] + cm["dropped_noise"]
     kept = cm["kept_real"] + cm["kept_noise"]
+
+    prec_before = rate(n_real, n)
+    prec_after = rate(cm["kept_real"], kept)
+    recall_after = rate(cm["kept_real"], n_real)
+
     summary = {
         "n": n, "n_real": n_real, "n_noise": n_noise, "confusion": cm,
-        "precision_before": rate(n_real, n),          # = baseline "luôn giữ" trên tập này
-        "precision_after": rate(cm["kept_real"], kept),
-        "real_kept_rate": rate(cm["kept_real"], n_real),
+        "precision_before": prec_before,
+        "f1_before": f1_score(prec_before["value"], 1.0 if n_real else 0.0),
+        "precision_after": prec_after,
+        "real_kept_rate": recall_after,
+        "f1_after": f1_score(prec_after["value"], recall_after["value"]),
         "noise_removed_rate": rate(cm["dropped_noise"], n_noise),
         "fail_open": sum(1 for v in verdicts if v["source"] == "fail_open"),
     }
@@ -90,7 +127,7 @@ def test_level(expected, names, labeled_by_test, verdict_of, use_reviewer):
             if use_reviewer:
                 v = verdict_of.get(lab["finding_id"])
                 if v is None:
-                    missing += 1      # chưa có verdict -> giữ lại (tinh thần fail-open)
+                    missing += 1
                 elif v != "TP":
                     continue
             if cwe_matches(target, lab["finding_cwe"], True):
@@ -117,7 +154,7 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--model", default="qwen2.5-coder:3b")
     ap.add_argument("--split", choices=["dev", "test"], default="dev")
-    ap.add_argument("--prompt", default="reviewer_v3callee_text")
+    ap.add_argument("--prompt", default="reviewer_v4")
     ap.add_argument("--tag", default="", help="hậu tố tên file kết quả, ví dụ c9")
     args = ap.parse_args()
 
@@ -144,10 +181,14 @@ def main():
     print(f"Finding: {summary['n']} ({summary['n_real']} thật, {summary['n_noise']} nhiễu) "
           f"| fail-open: {summary['fail_open']}")
     print("\n[MỨC FINDING]")
-    print(f"Precision trước (giữ hết): {fmt(summary['precision_before'])}")
-    print(f"Precision sau Reviewer   : {fmt(summary['precision_after'])}")
-    print(f"Giữ lại finding thật     : {fmt(summary['real_kept_rate'])}   <- loại nhầm = mất Recall")
+    print(f"Precision trước (giữ hết): {fmt(summary['precision_before'])} | F1 trước: {summary['f1_before']:.4f}")
+    print(f"Precision sau Reviewer   : {fmt(summary['precision_after'])} | F1 sau  : {summary['f1_after']:.4f}")
+    print(f"Recall (giữ finding thật): {fmt(summary['real_kept_rate'])}   <- loại nhầm = mất Recall")
     print(f"Loại được finding nhiễu  : {fmt(summary['noise_removed_rate'])}")
+
+    print("\n[KIỂM ĐỊNH PHÂN BIỆT NHIỄU / THẬT (Fisher Exact)]")
+    print_discrimination("Tất cả verdict", verdicts, labels)
+    print_discrimination("Chỉ local_llm", [r for r in verdicts if r["source"] == "local_llm"], labels)
 
     print("\n[THEO CATEGORY]  (giữ thật / tổng thật | loại nhiễu / tổng nhiễu)")
     for cat in sorted(by_cat):
@@ -163,9 +204,9 @@ def main():
             print(f"{lvl:<7} {b['correct']}/{b['n']} = {b['correct']/b['n']:.3f}")
 
     print(f"\n[MỨC TEST CASE, {len(names)} test case của tập '{args.split}' (strict + tương đương CWE)]")
-    print(f"{'':<16}{'Precision':>10}{'TPR':>8}{'FPR':>8}{'Bench':>8}   TP/FP/TN/FN")
+    print(f"{'':<16}{'Precision':>10}{'Recall':>8}{'F1':>8}{'FPR':>8}{'Bench':>8}   TP/FP/TN/FN")
     for label, m in (("Giữ hết", base), ("Sau Reviewer", after)):
-        print(f"{label:<16}{m['precision']:>10}{m['recall_tpr']:>8}{m['fpr']:>8}"
+        print(f"{label:<16}{m['precision']:>10}{m['recall_tpr']:>8}{m['f1']:>8}{m['fpr']:>8}"
               f"{m['benchmark_score']:>8}   {m['TP']}/{m['FP']}/{m['TN']}/{m['FN']}")
     if missing:
         print(f"CẢNH BÁO: {missing} finding chưa có verdict (đã giữ lại).")
