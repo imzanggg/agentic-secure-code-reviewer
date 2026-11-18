@@ -13,7 +13,7 @@ class RawFinding(BaseModel):
     line_start: int
     line_end: int
     message: str
-    severity: str
+    severity: str                                   # bỏ INFO vì thường là noise, ưu tiên ERROR
     confidence: Optional[str] = None
 
     # gợi ý sửa lỗi lấy từ chính SAST tool
