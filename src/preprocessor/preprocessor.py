@@ -137,7 +137,7 @@ class BenchmarkPreprocessor:
 
         workspace_dir.mkdir(parents=True, exist_ok=True)
 
-        core_items = [".mvn", "src", "pom.xml"]
+        core_items = [".mvn", "src", "pom.xml", "DevStyleHtml.prefs", "DevStyleXml.prefs"]
         for item_name in core_items:
             src_path = self.RAW_ROOT / item_name
             dst_path = workspace_dir / item_name

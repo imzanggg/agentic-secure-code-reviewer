@@ -6,10 +6,9 @@ Hỗ trợ cờ --no-git-ignore để quét trong các thư mục workspace bị
 
 import json
 import subprocess
-from pathlib import Path
 from typing import List
 
-from .base import SASTTool, RawFinding
+from .base import RawFinding, SASTTool
 
 
 class SemgrepTool(SASTTool):
@@ -28,6 +27,8 @@ class SemgrepTool(SASTTool):
             "--no-git-ignore",  # Bỏ qua gitignore để quét được trong data/workspace/
             target_path,
         ]
+
+        print(f"[INFO] Đang chạy Semgrep ({self.ruleset}) tại {target_path}...")
 
         try:
             result = subprocess.run(
@@ -50,6 +51,10 @@ class SemgrepTool(SASTTool):
         except json.JSONDecodeError as e:
             print(f"[ERROR] Lỗi parse JSON từ Semgrep output: {e}")
             return []
+
+        errors = data.get("errors", [])
+        if errors:
+            print(f"[WARN] Semgrep báo {len(errors)} lỗi/cảnh báo khi quét (ví dụ: {errors[0]})")
 
         findings = []
         for r in data.get("results", []):
@@ -76,4 +81,5 @@ class SemgrepTool(SASTTool):
                 )
             )
 
+        print(f"[INFO] Semgrep hoàn tất: tìm thấy {len(findings)} raw finding")
         return findings

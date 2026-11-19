@@ -1,0 +1,22 @@
+Vulnerability Report
+- Tool: {tool_name}
+- Rule: {rule_id}
+- Weakness: {cwe_id}
+- Message: {message}
+- Flagged lines in original file: {line_start}-{line_end} (marked with // <-- FLAGGED below)
+
+Reviewer Analysis (Why this is a True Positive)
+- Reasoning: {reviewer_reasoning}
+{data_flow_block}
+
+Existing file imports (top of file):
+```java
+{existing_imports}
+```
+
+Editable Java method (rewrite this complete method inside <<<FIXED>>>...<<<END_FIXED>>>):
+```java
+{numbered_code}
+```
+
+{callee_block}{feedback_block}Provide your fix using the exact format (EXPLANATION, IMPORTS, <<<FIXED>>>).

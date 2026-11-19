@@ -1,0 +1,6 @@
+pydantic>=2.0
+requests
+scipy
+tree-sitter
+tree-sitter-java
+semgrep

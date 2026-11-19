@@ -66,6 +66,7 @@ class SpotBugsTool(SASTTool):
             "-Dspotbugs.failOnError=false",
             "-Dspotbugs.xmlOutput=true",
             "-Denforcer.skip=true",
+            "-Dspotless.skip=true",
             "-DskipTests",
             "-q",
         ]
@@ -83,8 +84,11 @@ class SpotBugsTool(SASTTool):
             timeout=self.timeout,
         )
 
-        if res.returncode != 0 and not (pom_dir / "target" / "spotbugsXml.xml").exists():
-            print(f"[ERROR] Maven SpotBugs thất bại:\nSTDOUT:\n{res.stdout}\nSTDERR:\n{res.stderr}")
+        if res.returncode != 0:
+            if not (pom_dir / "target" / "spotbugsXml.xml").exists():
+                print(f"[ERROR] Maven SpotBugs thất bại:\nSTDOUT:\n{res.stdout}\nSTDERR:\n{res.stderr}")
+            else:
+                print(f"[WARN] Maven SpotBugs trả về mã lỗi {res.returncode} (vẫn dùng XML hiện có):\n{res.stderr or res.stdout}")
 
     def _parse_spotbugs_xml(self, xml_path: Path, pom_dir: Path, target_path: Path) -> List[RawFinding]:
         findings: List[RawFinding] = []

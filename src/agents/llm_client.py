@@ -6,7 +6,7 @@ Ollama trực tiếp, nên đổi model hay provider chỉ phải sửa file nà
 
 import os
 import time
-from typing import Optional
+from typing import Optional, Union
 
 import requests
 from pydantic import BaseModel
@@ -23,6 +23,7 @@ class LLMResponse(BaseModel):
     prompt_tokens: Optional[int] = None
     completion_tokens: Optional[int] = None
     done_reason: Optional[str] = None
+    thinking: Optional[str] = None
 
 
 class OllamaClient:
@@ -38,6 +39,7 @@ class OllamaClient:
         num_predict: int = 500,
         repeat_penalty: Optional[float] = None,
         repeat_last_n: Optional[int] = None,
+        think: Optional[Union[bool, str]] = None,
     ):
         self.model = model
         self.base_url = (base_url or os.environ.get("OLLAMA_BASE_URL")
@@ -50,6 +52,7 @@ class OllamaClient:
         self.num_predict = num_predict
         self.repeat_penalty = repeat_penalty
         self.repeat_last_n = repeat_last_n
+        self.think = think
 
     def list_models(self) -> list[str]:
         try:
@@ -88,11 +91,19 @@ class OllamaClient:
             payload["options"]["repeat_penalty"] = self.repeat_penalty
         if self.repeat_last_n is not None:
             payload["options"]["repeat_last_n"] = self.repeat_last_n
+        if self.think is not None:
+            payload["think"] = self.think
 
         start = time.perf_counter()
         try:
             r = requests.post(f"{self.base_url}/api/chat", json=payload,
                               timeout=self.timeout_sec)
+            # Nếu model không hỗ trợ tham số `think`, tự động bỏ qua và thử lại
+            if r.status_code == 400 and "think" in payload and "thinking" in r.text.lower():
+                payload.pop("think", None)
+                self.think = None
+                r = requests.post(f"{self.base_url}/api/chat", json=payload,
+                                  timeout=self.timeout_sec)
         except requests.Timeout as e:
             raise LLMError(f"Timeout sau {self.timeout_sec}s") from e
         except requests.RequestException as e:
@@ -104,8 +115,10 @@ class OllamaClient:
 
         try:
             data = r.json()
-            content = data["message"]["content"]
-        except (ValueError, KeyError) as e:
+            msg = data["message"]
+            content = msg.get("content", "")
+            thinking = msg.get("thinking")
+        except (ValueError, KeyError, TypeError) as e:
             raise LLMError(f"Phản hồi không đúng định dạng: {r.text[:300]}") from e
 
         return LLMResponse(
@@ -115,4 +128,5 @@ class OllamaClient:
             prompt_tokens=data.get("prompt_eval_count"),
             completion_tokens=data.get("eval_count"),
             done_reason=data.get("done_reason"),
+            thinking=thinking,
         )
