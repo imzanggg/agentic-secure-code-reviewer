@@ -1,23 +1,31 @@
 """
 validator.py
-Validator nhẹ cho Module 3: thực hiện các bước kiểm định tuần tự sau khi áp bản vá:
+Validator (Tầng 4): thực hiện các bước kiểm định tất định tuần tự sau khi áp bản vá:
 1. Áp bản vá + import vào file (patch_applier)
 2. Kiểm tra nhanh cú pháp & chữ ký method bằng tree-sitter (~1ms)
 3. Biên dịch Maven (mvn compile)
-4. Quét lại SAST trên đúng file/class đã sửa (SpotBugs single_class / Semgrep single file)
+4. Quét lại SAST trên đúng file/class đã sửa (SpotBugs / Semgrep)
+   và trích xuất Finding đầy đủ ngữ cảnh trên file sau vá để chuyển cho Tầng 2 lọc FP.
 """
 
 import re
 import subprocess
+import uuid
 from pathlib import Path
 from typing import List, Optional, Set, Tuple
 
+from src.module3.schemas import Module3Patch
+from src.module4.patch_applier import (
+    apply_patch_to_file,
+    check_syntax_and_signature,
+    extract_method_signature,
+)
+from src.module4.schemas import PatchApplyResult, ValidationResult
 from src.scanner.base import RawFinding
+from src.scanner.context_extractor import JavaContextExtractor
 from src.scanner.semgrep_tool import SemgrepTool
 from src.scanner.spotbugs_tool import SpotBugsTool
 from src.schemas import Finding
-from src.module3.patch_applier import apply_patch_to_file, check_syntax_and_signature, extract_method_signature
-from src.module3.schemas import Module3Patch, PatchApplyResult, ValidationResult
 
 SEVERITY_BLOCKLIST = {"INFO"}
 CONFIDENCE_BLOCKLIST = {"LOW"}
@@ -28,7 +36,8 @@ COMPILE_ERR_LINE_RE = re.compile(r"^\[ERROR\]\s*(.+)$")
 
 def _filter_noise(findings: List[RawFinding]) -> List[RawFinding]:
     return [
-        f for f in findings
+        f
+        for f in findings
         if f.severity not in SEVERITY_BLOCKLIST and f.confidence not in CONFIDENCE_BLOCKLIST
     ]
 
@@ -57,7 +66,9 @@ def _extract_compile_errors(stdout: str, stderr: str, max_lines: int = 12) -> st
         m = COMPILE_ERR_LINE_RE.match(line.strip())
         if m:
             msg = m.group(1).strip()
-            if msg and not msg.startswith(("To see the full stack trace", "Re-run Maven", "For more information", "-> [Help")):
+            if msg and not msg.startswith(
+                ("To see the full stack trace", "Re-run Maven", "For more information", "-> [Help")
+            ):
                 err_lines.append(msg)
         elif "error:" in line.lower():
             err_lines.append(line.strip())
@@ -73,11 +84,13 @@ class PatchValidator:
         self,
         semgrep_tool: Optional[SemgrepTool] = None,
         spotbugs_tool: Optional[SpotBugsTool] = None,
+        context_extractor: Optional[JavaContextExtractor] = None,
         check_all_tools: bool = False,
         compile_timeout: int = 180,
     ):
         self.semgrep = semgrep_tool or SemgrepTool(ruleset="p/java")
         self.spotbugs = spotbugs_tool or SpotBugsTool()
+        self.context_extractor = context_extractor or JavaContextExtractor()
         self.check_all_tools = check_all_tools
         self.compile_timeout = compile_timeout
 
@@ -145,15 +158,25 @@ class PatchValidator:
                 feedback=f"Maven compilation failed:\n{compile_err}",
             )
 
-        # 4. Quét lại SAST trên đúng file đã sửa
-        sast_ok, remaining_cnt, new_cwes, sast_feedback = self._rescan_sast(finding, apply_res)
+        # 4. Quét lại SAST trên đúng file đã sửa & dựng Finding mới cho Module 2 lọc FP
+        (
+            sast_raw_clean,
+            persisting_findings,
+            introduced_findings,
+            new_cwes,
+            sast_raw_notes,
+        ) = self._rescan_sast(finding, apply_res)
+
+        remaining_cnt = len(persisting_findings) + len(introduced_findings)
         return apply_res, ValidationResult(
             syntax_valid=True,
             signature_preserved=True,
             compiled=True,
-            sast_passed=sast_ok,
-            failure_stage=None if sast_ok else "sast",
-            feedback=sast_feedback,
+            sast_raw_clean=sast_raw_clean,
+            failure_stage=None if sast_raw_clean else "sast_raw",
+            feedback=sast_raw_notes,
+            persisting_findings=persisting_findings,
+            introduced_findings=introduced_findings,
             remaining_findings_count=remaining_cnt,
             new_cwe_ids=new_cwes,
         )
@@ -186,11 +209,39 @@ class PatchValidator:
             return False, _extract_compile_errors(res.stdout, res.stderr)
         return True, None
 
+    def _to_complete_finding(self, raw: RawFinding) -> Finding:
+        ctx_info = None
+        try:
+            ctx_info = self.context_extractor.extract_method(raw.file_path, raw.line_start)
+        except Exception as e:
+            print(f"[WARN] Validator không trích được context cho {raw.file_path}:{raw.line_start} - {e}")
+
+        return Finding(
+            finding_id=str(uuid.uuid4()),
+            tool_name=raw.tool_name,
+            rule_id=raw.rule_id,
+            cwe_id=raw.cwe_id,
+            file_path=raw.file_path,
+            line_start=raw.line_start,
+            line_end=raw.line_end,
+            message=raw.message,
+            severity=raw.severity,
+            confidence=raw.confidence,
+            remediation_advice=raw.remediation_advice,
+            suggested_fix_snippet=raw.suggested_fix_snippet,
+            references=raw.references,
+            method_name=ctx_info["method_name"] if ctx_info else None,
+            function_context=ctx_info["source"] if ctx_info else None,
+            context_start_line=ctx_info["start_line"] if ctx_info else None,
+            context_end_line=ctx_info["end_line"] if ctx_info else None,
+            callee_context=ctx_info.get("callee_context") if ctx_info else None,
+        )
+
     def _rescan_sast(
         self,
         finding: Finding,
         apply_res: PatchApplyResult,
-    ) -> Tuple[bool, int, List[str], Optional[str]]:
+    ) -> Tuple[bool, List[Finding], List[Finding], List[str], Optional[str]]:
         tool_tag = (finding.tool_name or "").lower()
         run_semgrep = self.check_all_tools or ("semgrep" in tool_tag) or (not tool_tag)
         run_spotbugs = self.check_all_tools or ("spotbugs" in tool_tag) or (not tool_tag)
@@ -204,16 +255,15 @@ class PatchValidator:
         filtered = _filter_noise(raw_results)
 
         added_imp_lines = len(apply_res.added_imports)
-        method_start = (finding.context_start_line or 1) + added_imp_lines
-        patch_len_delta = (
-            (apply_res.line_end - apply_res.line_start + 1)
-            if (apply_res.line_start and apply_res.line_end)
-            else 0
-        )
-        method_end = (finding.context_end_line or 10**6) + added_imp_lines + max(patch_len_delta, 10)
+        if apply_res.line_start is not None and apply_res.line_end is not None:
+            method_start = apply_res.line_start
+            method_end = apply_res.line_end
+        else:
+            method_start = (finding.context_start_line or 1) + added_imp_lines
+            method_end = (finding.context_end_line or 10**6) + added_imp_lines
 
-        persisting: List[RawFinding] = []
-        introduced: List[RawFinding] = []
+        persisting_raw: List[RawFinding] = []
+        introduced_raw: List[RawFinding] = []
         new_cwes: Set[str] = set()
 
         for rf in filtered:
@@ -225,27 +275,26 @@ class PatchValidator:
                 not finding.cwe_id and rf.rule_id == finding.rule_id
             )
             if same_cwe:
-                persisting.append(rf)
-            elif (
-                apply_res.line_start is not None
-                and apply_res.line_end is not None
-                and apply_res.line_start <= rf.line_start <= apply_res.line_end
-            ):
-                introduced.append(rf)
+                persisting_raw.append(rf)
+            else:
+                introduced_raw.append(rf)
                 if rf.cwe_id:
                     new_cwes.add(rf.cwe_id)
 
-        if not persisting and not introduced:
-            return True, 0, [], None
+        if not persisting_raw and not introduced_raw:
+            return True, [], [], [], None
+
+        persisting_findings = [self._to_complete_finding(rf) for rf in persisting_raw]
+        introduced_findings = [self._to_complete_finding(rf) for rf in introduced_raw]
 
         notes: List[str] = []
-        for rf in persisting:
+        for f in persisting_findings:
             notes.append(
-                f"Vulnerability still detected ({rf.tool_name} / {rf.cwe_id or rf.rule_id} at line {rf.line_start}): {rf.message}"
+                f"[RAW persisting] ({f.tool_name} / {f.cwe_id or f.rule_id} at line {f.line_start}): {f.message}"
             )
-        for rf in introduced:
+        for f in introduced_findings:
             notes.append(
-                f"New vulnerability introduced on patched lines ({rf.tool_name} / {rf.cwe_id or rf.rule_id} at line {rf.line_start}): {rf.message}"
+                f"[RAW introduced] ({f.tool_name} / {f.cwe_id or f.rule_id} at line {f.line_start}): {f.message}"
             )
 
-        return False, len(persisting) + len(introduced), sorted(new_cwes), "\n".join(notes)
+        return False, persisting_findings, introduced_findings, sorted(new_cwes), "\n".join(notes)

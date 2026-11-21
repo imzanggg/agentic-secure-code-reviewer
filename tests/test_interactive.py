@@ -2,7 +2,7 @@
 test_interactive.py
 Test Runner hợp nhất: Hỗ trợ chế độ tương tác (Interactive Wizard) hoặc Headless (qua args).
 Giữ nguyên cơ chế tách riêng từng run trong data/workspace/<run_id>/ và data/results/<run_id>/.
-Hỗ trợ kiểm thử từng module (Tier 1, Tier 2, Tier 3 Fixer) hoặc toàn bộ pipeline (full_graph).
+Hỗ trợ kiểm thử từng module (Tier 1, Tier 2, Tier 3-5) hoặc toàn bộ pipeline (full_graph).
 """
 
 import argparse
@@ -13,7 +13,9 @@ from pathlib import Path
 from src.agents.llm_client import OllamaClient
 from src.agents.reviewer import ReviewerAgent
 from src.graph.workflow import build_full_graph, build_review_graph
-from src.module3 import FixerAgent, FixLoopRunner, PatchValidator, compute_fixer_metrics
+from src.module3 import FixerAgent
+from src.module4 import PatchValidator
+from src.module5 import FixLoopRunner, compute_fixer_metrics
 from src.preprocessor import BenchmarkPreprocessor
 from src.scanner.aggregator import SASTAggregator
 from src.scanner.context_extractor import JavaContextExtractor
@@ -78,8 +80,8 @@ def run_interactive():
     print("  [4] AST Context Extractor    (Tree-sitter Java method extraction)")
     print("  [5] Entire Tier 1 Pipeline   (Full scan -> Dedup -> Context)")
     print("  [6] LangGraph (Tier 1 -> 2)  (Scanner -> Reviewer Agent)")
-    print("  [7] Module 3 Fixer only      (Fixer + Patch Applier + Validator Loop)")
-    print("  [8] Full LangGraph (1->2->3) (Scanner -> Reviewer -> Fixer Loop)")
+    print("  [7] Tier 3-5 Fix Loop only   (Fixer -> Validator -> Re-Reviewer -> Controller)")
+    print("  [8] Full LangGraph (1->5)    (Scanner -> Reviewer -> Fix-Validate-ReReview Loop)")
 
     mod_choice = input("\nSelect option [1-8] (Default: 5): ").strip()
     module_mapping = {
@@ -99,7 +101,7 @@ def run_interactive():
     max_iterations = DEFAULT_MAX_ITERATIONS
     keep_passing_patch = False
 
-    if module in ("graph", "full_graph"):
+    if module in ("graph", "fixer", "full_graph"):
         rm = input(f"Reviewer Ollama model (Default: {DEFAULT_REVIEWER_MODEL}): ").strip()
         if rm:
             reviewer_model = rm
@@ -207,7 +209,7 @@ def _print_fixer_summary(summaries, metrics: dict, out_dir: Path):
 
     ss = metrics.get("single_shot", {})
     ml = metrics.get("multi_loop", {})
-    print(f"\n=== FIXER SUMMARY ({metrics.get('total_findings', 0)} findings) ===")
+    print(f"\n=== FIXER-CONTROLLER SUMMARY ({metrics.get('total_findings', 0)} findings) ===")
     if metrics.get("total_findings", 0) > 0:
         print(
             f"Single-shot (iter=1) : "
@@ -221,6 +223,10 @@ def _print_fixer_summary(summaries, metrics: dict, out_dir: Path):
             f"Applied={ml['applied_rate']:.2%} | Compiled={ml['compiled_rate']:.2%} | "
             f"AvgTokens={ml['avg_total_tokens']}"
         )
+        if metrics.get("final_statuses"):
+            print(f"Final statuses       : {metrics['final_statuses']}")
+        if metrics.get("re_review_stats"):
+            print(f"Re-review stats      : {metrics['re_review_stats']}")
         if metrics.get("failure_stages"):
             print(f"Failure stages       : {metrics['failure_stages']}")
     print(f"[INFO] Fixer results saved to {out_dir / 'fixer_results.json'}")
@@ -321,12 +327,23 @@ def execute_module(
             print(f"[INFO] No reviewer_verdicts.json found; running Fixer directly on {len(targets)} Tier 1 findings.")
 
         categories_by_test = _load_categories_by_test()
+        reviewer = ReviewerAgent(
+            client=OllamaClient(
+                model=reviewer_model,
+                timeout_sec=DEFAULT_LLM_TIMEOUT,
+                num_ctx=DEFAULT_NUM_CTX,
+                keep_alive="10m",
+            ),
+            prompt_version="reviewer_v4",
+            output_mode="text",
+            use_rule_triage=True,
+        )
         fixer_agent = FixerAgent(
             client=OllamaClient(
                 model=fixer_model,
                 timeout_sec=DEFAULT_LLM_TIMEOUT,
                 num_ctx=DEFAULT_NUM_CTX,
-                keep_alive="5m",
+                keep_alive="10m",
                 num_predict=DEFAULT_FIXER_NUM_PREDICT,
                 think=False,
             ),
@@ -336,6 +353,7 @@ def execute_module(
         runner = FixLoopRunner(
             fixer=fixer_agent,
             validator=validator,
+            reviewer=reviewer,
             max_iterations=max_iterations,
             keep_passing_patch=keep_passing_patch,
         )
@@ -358,7 +376,7 @@ def execute_module(
                 model=reviewer_model,
                 timeout_sec=DEFAULT_LLM_TIMEOUT,
                 num_ctx=DEFAULT_NUM_CTX,
-                keep_alive="0",
+                keep_alive="10m",
             ),
             prompt_version="reviewer_v4",
             output_mode="text",
@@ -369,7 +387,7 @@ def execute_module(
                 model=fixer_model,
                 timeout_sec=DEFAULT_LLM_TIMEOUT,
                 num_ctx=DEFAULT_NUM_CTX,
-                keep_alive="5m",
+                keep_alive="10m",
                 num_predict=DEFAULT_FIXER_NUM_PREDICT,
                 think=False,
             ),
@@ -379,6 +397,7 @@ def execute_module(
         runner = FixLoopRunner(
             fixer=fixer_agent,
             validator=validator,
+            reviewer=reviewer,
             max_iterations=max_iterations,
             keep_passing_patch=keep_passing_patch,
         )

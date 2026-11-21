@@ -5,15 +5,10 @@ benchmark_scoring.py
   2. SpotBugs Only (Bytecode-level SAST)
   3. Combined Pipeline (Tier 1 SAST Aggregator với Fuzzy Deduplication)
   4. Reviewer Agent (Tier 2 LLM Agentic Triage)
-  5. Fixer Agent (Tier 3 Pre-trained LLM Patching + Validation Loop: Single-shot vs Multi-loop)
-
-Đặc điểm:
-  - Tái sử dụng workspace cố định (data/workspace/run_benchmark) để bỏ qua re-compile.
-  - Hỗ trợ resume khi chạy LLM (Tier 2 & Tier 3) và chế độ --score-only xem lại điểm trong 0.1 giây.
-  - Tối ưu cho máy 8GB RAM CPU-only: giải phóng model Reviewer (keep_alive="0") trước khi nạp model Fixer.
+  5. Fixer Agent (Tier 3) + Validator (Tier 4) + Re-Reviewer (Tier 2) + Loop Controller (Tier 5)
 
 Các cách chạy từ thư mục gốc:
-  # 1. Đánh giá Tier 1 SAST (~10-15 phút):
+  # 1. Đánh giá Tier 1 SAST:
   python3 -m evaluation.benchmark_scoring
 
   # 2. Đánh giá Tier 1 + Tier 2 Reviewer (tập test):
@@ -22,7 +17,7 @@ Các cách chạy từ thư mục gốc:
   # 3. Bỏ qua quét SAST, chỉ chạy và chấm Tier 2:
   python3 -m evaluation.benchmark_scoring --reviewer --skip-sast --split test
 
-  # 4. Bỏ qua SAST và Reviewer (dùng verdicts Tier 2 có sẵn), chỉ chạy và chấm Tier 3 Fixer:
+  # 4. Bỏ qua SAST và Reviewer Pass 4 (dùng verdicts Tier 2 có sẵn), chạy Tier 3-4-5 (có Re-review lọc FP):
   python3 -m evaluation.benchmark_scoring --fixer --skip-sast --skip-reviewer --split test
 
   # 5. Chỉ in lại bảng điểm toàn hệ thống từ kết quả đã lưu (0.1 giây):
@@ -45,13 +40,9 @@ from scipy.stats import fisher_exact
 
 from src.agents.llm_client import OllamaClient
 from src.agents.reviewer import ReviewerAgent
-from src.module3 import (
-    FixerAgent,
-    FixLoopRunner,
-    FixSummary,
-    PatchValidator,
-    compute_fixer_metrics,
-)
+from src.module3 import FixerAgent
+from src.module4 import PatchValidator
+from src.module5 import FixLoopRunner, FixSummary, compute_fixer_metrics
 from src.preprocessor import BenchmarkPreprocessor
 from src.scanner.aggregator import SASTAggregator
 from src.scanner.base import RawFinding
@@ -102,7 +93,8 @@ def load_expected_results(csv_path: Path) -> dict:
 
 def filter_noise(findings: List[RawFinding]) -> List[RawFinding]:
     return [
-        f for f in findings
+        f
+        for f in findings
         if f.severity not in SEVERITY_BLOCKLIST and f.confidence not in CONFIDENCE_BLOCKLIST
     ]
 
@@ -132,7 +124,12 @@ def compute_metrics(c: dict) -> dict:
     }
 
 
-def score_test_level(expected: dict, by_test: dict, mode: str, target_names: Optional[set] = None) -> Tuple[dict, dict]:
+def score_test_level(
+    expected: dict,
+    by_test: dict,
+    mode: str,
+    target_names: Optional[set] = None,
+) -> Tuple[dict, dict]:
     total = {"TP": 0, "FP": 0, "TN": 0, "FN": 0}
     per_cat = defaultdict(lambda: {"TP": 0, "FP": 0, "TN": 0, "FN": 0})
 
@@ -172,16 +169,18 @@ def label_findings(findings: list, expected: dict) -> Tuple[List[dict], int]:
             continue
         target = f"CWE-{info['cwe']}"
         f_id = getattr(f, "finding_id", str(uuid.uuid4()))
-        labeled.append({
-            "finding_id": f_id,
-            "test_name": m.group(1),
-            "category": info["category"],
-            "expected_cwe": target,
-            "finding_cwe": f.cwe_id,
-            "test_is_real_vulnerability": info["real"],
-            "is_true_positive": info["real"] and cwe_matches(target, f.cwe_id, True),
-            "is_true_positive_exact": info["real"] and f.cwe_id == target,
-        })
+        labeled.append(
+            {
+                "finding_id": f_id,
+                "test_name": m.group(1),
+                "category": info["category"],
+                "expected_cwe": target,
+                "finding_cwe": f.cwe_id,
+                "test_is_real_vulnerability": info["real"],
+                "is_true_positive": info["real"] and cwe_matches(target, f.cwe_id, True),
+                "is_true_positive_exact": info["real"] and f.cwe_id == target,
+            }
+        )
     return labeled, unmatched
 
 
@@ -221,11 +220,14 @@ def build_complete_findings(raw_findings: List[RawFinding], extractor: JavaConte
 
 
 def print_comparison_table(eval_results: Dict[str, dict], scope_name: str = "FULL BENCHMARK"):
-    """In bảng so sánh đối đầu trực quan đa cấu hình (3 hoặc 4 cột)."""
+    """In bảng so sánh đối đầu trực quan đa cấu hình."""
     print("\n" + "=" * 105)
     print(f"               OWASP BENCHMARK - SYSTEM EVALUATION SCORECARD ({scope_name})")
     print("=" * 105)
-    print(f"{'Configuration':<26} | {'TPR (Recall)':<12} | {'FPR':<10} | {'OWASP Score':<12} | {'Precision':<10} | {'F1-Score':<8}")
+    print(
+        f"{'Configuration':<26} | {'TPR (Recall)':<12} | {'FPR':<10} | "
+        f"{'OWASP Score':<12} | {'Precision':<10} | {'F1-Score':<8}"
+    )
     print("-" * 105)
 
     for name, res in eval_results.items():
@@ -235,7 +237,10 @@ def print_comparison_table(eval_results: Dict[str, dict], scope_name: str = "FUL
         fpr_str = f"{m['fpr']:.2%}"
         prec_str = f"{m['precision']:.2%}"
         f1_str = f"{m['f1']:.4f}"
-        print(f"{name:<26} | {tpr_str:<12} | {fpr_str:<10} | {score_str:<12} | {prec_str:<10} | {f1_str:<8}")
+        print(
+            f"{name:<26} | {tpr_str:<12} | {fpr_str:<10} | "
+            f"{score_str:<12} | {prec_str:<10} | {f1_str:<8}"
+        )
 
     print("=" * 105)
     print("* Chú thích: Metrics hiển thị ở mức Strict Equivalence (chuẩn OWASP Benchmark).")
@@ -267,17 +272,17 @@ def print_category_comparison(eval_results: Dict[str, dict]):
 
 
 def print_fixer_scorecard(fixer_metrics: dict, scope_name: str, max_iterations: int):
-    """In bảng so sánh Tier 3 Fixer Agent: Single-shot vs Multi-loop."""
+    """In bảng so sánh Tier 3-4-5: Single-shot vs Multi-loop và thống kê Re-review FP."""
     n = fixer_metrics.get("total_findings", 0)
     if n == 0:
-        print("\n[WARN] Không có kết quả Tier 3 Fixer nào để hiển thị.")
+        print("\n[WARN] Không có kết quả Fixer/Loop nào để hiển thị.")
         return
 
     ss = fixer_metrics["single_shot"]
     ml = fixer_metrics["multi_loop"]
 
     print("\n" + "=" * 105)
-    print(f"       TIER 3 FIXER AGENT SCORECARD - SINGLE-SHOT VS MULTI-LOOP ({scope_name}, N={n})")
+    print(f"    TIER 3-5 FIX-VALIDATE-REREVIEW SCORECARD - SINGLE-SHOT VS MULTI-LOOP ({scope_name}, N={n})")
     print("=" * 105)
     print(
         f"{'Mode':<22} | {'Fix Success':<14} | {'Applied':<9} | {'Syntax':<8} | "
@@ -301,6 +306,17 @@ def print_fixer_scorecard(fixer_metrics: dict, scope_name: str, max_iterations: 
             f"* Tokens trung bình cho mỗi bản vá thành công: "
             f"Single-shot = {ss.get('avg_tokens_per_success') or 'N/A'} | "
             f"Multi-loop = {ml.get('avg_tokens_per_success')}"
+        )
+    if fixer_metrics.get("final_statuses"):
+        print(f"* Trạng thái đầu ra Tầng 5: {fixer_metrics['final_statuses']}")
+    if fixer_metrics.get("re_review_stats"):
+        rr = fixer_metrics["re_review_stats"]
+        print(
+            f"* Re-review Tầng 2 (lọc FP trước loop): "
+            f"resolved_sast_clean={rr.get('resolved_sast_clean', 0)}, "
+            f"resolved_via_sast_fp_filter={rr.get('resolved_via_sast_fp_filter', 0)}, "
+            f"total_re_reviewed={rr.get('total_re_reviewed', 0)}, "
+            f"total_fp_filtered={rr.get('total_sast_fp_filtered', 0)}"
         )
     if fixer_metrics.get("failure_stages"):
         print(f"* Phân bố điểm lỗi cuối (Multi-loop): {fixer_metrics['failure_stages']}")
@@ -336,10 +352,16 @@ def run_and_score_tier2(
     stem = f"{split_name}_{safe(model_name)}_{prompt_version}"
     out_path = REVIEWER_RESULTS_DIR / f"{stem}.jsonl"
 
-    target_names = set(json.loads(SPLIT_FILE.read_text(encoding="utf-8"))[split_name]) if split_name in ("dev", "test") else None
+    target_names = (
+        set(json.loads(SPLIT_FILE.read_text(encoding="utf-8"))[split_name])
+        if split_name in ("dev", "test")
+        else None
+    )
     todo_findings = [
-        f for f in findings_list
-        if target_names is None or ((m := TEST_NAME_PATTERN.search(f.file_path)) and m.group(1) in target_names)
+        f
+        for f in findings_list
+        if target_names is None
+        or ((m := TEST_NAME_PATTERN.search(f.file_path)) and m.group(1) in target_names)
     ]
 
     print("\n" + "-" * 50)
@@ -383,19 +405,28 @@ def run_and_score_tier2(
         print(f"[ERROR] Không tìm thấy file kết quả Reviewer tại: {out_path}")
         return [], {}
 
-    verdict_objs = [Verdict(**json.loads(x)) for x in out_path.read_text(encoding="utf-8").splitlines() if x.strip()]
+    verdict_objs = [
+        Verdict(**json.loads(x))
+        for x in out_path.read_text(encoding="utf-8").splitlines()
+        if x.strip()
+    ]
     verdicts_by_id = {v.finding_id: v for v in verdict_objs}
 
     tp_findings = [
-        f for f in todo_findings
+        f
+        for f in todo_findings
         if (v := verdicts_by_id.get(f.finding_id)) is not None and v.verdict == "TP"
     ]
     dropped_noise_count = sum(
-        1 for f in todo_findings
+        1
+        for f in todo_findings
         if (v := verdicts_by_id.get(f.finding_id)) is not None and v.verdict == "FP"
     )
 
-    print(f"[INFO] Tier 2 Reviewer hoàn tất: giữ lại {len(tp_findings)} finding TP, loại bỏ {dropped_noise_count} finding FP")
+    print(
+        f"[INFO] Tier 2 Reviewer hoàn tất: giữ lại {len(tp_findings)} finding TP, "
+        f"loại bỏ {dropped_noise_count} finding FP"
+    )
 
     labeled_file = GLOBAL_RESULTS_DIR / "tier1_findings_labeled.json"
     if labeled_file.exists():
@@ -416,7 +447,10 @@ def run_and_score_tier2(
                     d += 1
         if min(a + c, b + d) > 0:
             odds, p = fisher_exact([[a, b], [c, d]])
-            print(f"[STATS] Fisher Exact Test: OR={odds:.2f}, p-value={p:.4f} (Loại được {a}/{a+c} nhiễu vs mất {b}/{b+d} thật)")
+            print(
+                f"[STATS] Fisher Exact Test: OR={odds:.2f}, p-value={p:.4f} "
+                f"(Loại được {a}/{a+c} nhiễu vs mất {b}/{b+d} thật)"
+            )
 
     return tp_findings, {
         "stem": stem,
@@ -426,7 +460,7 @@ def run_and_score_tier2(
 
 
 # ==============================================================================
-# HÀM CHẠY VÀ ĐÁNH GIÁ TIER 3 FIXER AGENT (PASS 5)
+# HÀM CHẠY VÀ ĐÁNH GIÁ TIER 3-4-5 (PASS 5)
 # ==============================================================================
 
 def run_and_score_tier3(
@@ -436,30 +470,36 @@ def run_and_score_tier3(
     split_name: str,
     fixer_model: str = "hf.co/ibm-granite/granite-4.2-3b-GGUF:Q4_K_M",
     fixer_prompt: str = "fixer_v1",
+    reviewer_model: str = "qwen2.5-coder:3b",
+    reviewer_prompt: str = "reviewer_v4",
+    use_rule_triage: bool = True,
     max_iterations: int = 3,
     score_only: bool = False,
 ) -> dict:
-    """Chạy Fixer Agent + Validation Loop trên các TP findings và chấm Single-shot vs Multi-loop."""
+    """Chạy Fixer (T3) + Validator (T4) + Re-Reviewer (T2) + Loop Controller (T5)."""
     FIXER_RESULTS_DIR.mkdir(parents=True, exist_ok=True)
     stem = f"{split_name}_{safe(fixer_model)}_{fixer_prompt}_iter{max_iterations}"
     out_path = FIXER_RESULTS_DIR / f"{stem}.jsonl"
 
     print("\n" + "-" * 50)
     print(
-        f"[RUN] Pass 5: Đánh giá Fixer Agent (Tier 3, model={fixer_model}, max_iter={max_iterations}) "
-        f"trên {len(tp_findings)} TP finding..."
+        f"[RUN] Pass 5: Đánh giá Tier 3-5 (fixer={fixer_model}, reviewer={reviewer_model}, "
+        f"max_iter={max_iterations}) trên {len(tp_findings)} TP finding..."
     )
 
     if not score_only:
         missing_files = sum(1 for f in tp_findings if not Path(f.file_path).exists())
         if missing_files > 0:
-            print(f"[WARN] Có {missing_files}/{len(tp_findings)} file nguồn chưa tồn tại trong workspace. Hãy đảm bảo workspace run_benchmark đã được khởi tạo.")
+            print(
+                f"[WARN] Có {missing_files}/{len(tp_findings)} file nguồn chưa tồn tại trong workspace. "
+                "Hãy đảm bảo workspace run_benchmark đã được khởi tạo."
+            )
 
         fixer_client = OllamaClient(
             model=fixer_model,
             timeout_sec=300.0,
             num_ctx=4096,
-            keep_alive="5m",
+            keep_alive="10m",
             num_predict=1024,
             think=False,
         )
@@ -467,6 +507,20 @@ def run_and_score_tier3(
             client=fixer_client,
             prompt_version=fixer_prompt,
         )
+
+        reviewer_client = OllamaClient(
+            model=reviewer_model,
+            timeout_sec=300.0,
+            num_ctx=4096,
+            keep_alive="10m",
+        )
+        re_reviewer_agent = ReviewerAgent(
+            client=reviewer_client,
+            prompt_version=reviewer_prompt,
+            output_mode="text",
+            use_rule_triage=use_rule_triage,
+        )
+
         validator = PatchValidator(
             semgrep_tool=SemgrepTool(ruleset="p/java"),
             spotbugs_tool=SpotBugsTool(),
@@ -474,6 +528,7 @@ def run_and_score_tier3(
         runner = FixLoopRunner(
             fixer=fixer_agent,
             validator=validator,
+            reviewer=re_reviewer_agent,
             max_iterations=max_iterations,
             keep_passing_patch=False,
         )
@@ -521,12 +576,12 @@ def run_and_score_tier3(
 # ==============================================================================
 
 def main():
-    parser = argparse.ArgumentParser(description="OWASP Benchmark Full System Evaluation (Tier 1, Tier 2 & Tier 3)")
+    parser = argparse.ArgumentParser(description="OWASP Benchmark Full System Evaluation (Tier 1 -> Tier 5)")
     parser.add_argument("--clean", action="store_true", help="Xóa workspace run_benchmark và chuẩn bị lại từ đầu")
     parser.add_argument("--reviewer", action="store_true", help="Chạy và chấm điểm kèm theo Reviewer Agent (Tier 2)")
-    parser.add_argument("--fixer", action="store_true", help="Chạy và chấm điểm kèm theo Fixer Agent (Tier 3)")
+    parser.add_argument("--fixer", action="store_true", help="Chạy và chấm điểm kèm theo Fixer-Validator-Controller (Tier 3-5)")
     parser.add_argument("--skip-sast", action="store_true", help="Bỏ qua quét SAST Pass 1-3, nạp findings Tier 1 có sẵn")
-    parser.add_argument("--skip-reviewer", action="store_true", help="Bỏ qua gọi LLM Reviewer, nạp verdicts Tier 2 có sẵn")
+    parser.add_argument("--skip-reviewer", action="store_true", help="Bỏ qua gọi LLM Reviewer Pass 4, nạp verdicts Tier 2 có sẵn")
     parser.add_argument("--score-only", action="store_true", help="Không quét SAST hay chạy LLM, chỉ nạp kết quả in Scorecard")
     parser.add_argument("--split", choices=["dev", "test", "all"], default="test", help="Tập dữ liệu để đánh giá Reviewer/Fixer")
     parser.add_argument("--prompt", default="reviewer_v4", help="Phiên bản prompt Reviewer")
@@ -538,7 +593,7 @@ def main():
         help="Tên model pre-trained cho Fixer (khác với Reviewer)",
     )
     parser.add_argument("--fixer-prompt", default="fixer_v1", help="Phiên bản prompt Fixer")
-    parser.add_argument("--max-iterations", type=int, default=3, help="Số vòng lặp tối đa của Fixer Loop")
+    parser.add_argument("--max-iterations", type=int, default=3, help="Số vòng lặp tối đa của Loop Controller")
     args = parser.parse_args()
 
     expected = load_expected_results(EXPECTED_CSV)
@@ -601,7 +656,8 @@ def main():
         GLOBAL_RESULTS_DIR.mkdir(parents=True, exist_ok=True)
         (GLOBAL_RESULTS_DIR / "tier1_findings_labeled.json").write_text(json.dumps(labeled_combined, indent=2))
         (GLOBAL_RESULTS_DIR / "tier1_findings.json").write_text(
-            json.dumps([f.model_dump() for f in complete_combined], indent=2, ensure_ascii=False), encoding="utf-8"
+            json.dumps([f.model_dump() for f in complete_combined], indent=2, ensure_ascii=False),
+            encoding="utf-8",
         )
     else:
         tier1_file = GLOBAL_RESULTS_DIR / "tier1_findings.json"
@@ -615,7 +671,11 @@ def main():
     spotbugs_findings = [f for f in complete_combined if "spotbugs" in f.tool_name]
     combined_findings = complete_combined
 
-    target_names = set(json.loads(SPLIT_FILE.read_text(encoding="utf-8"))[args.split]) if args.split in ("dev", "test") else None
+    target_names = (
+        set(json.loads(SPLIT_FILE.read_text(encoding="utf-8"))[args.split])
+        if args.split in ("dev", "test")
+        else None
+    )
     scope_name = f"SPLIT: {args.split.upper()}" if target_names else "FULL SUITE"
 
     # =========================================================================
@@ -664,7 +724,7 @@ def main():
             model_name=args.model,
             use_rule_triage=not args.no_rule_triage,
             score_only=(args.score_only or args.skip_reviewer),
-            keep_alive="0" if args.fixer else "10m",
+            keep_alive="10m",
         )
         verdicts_by_id = meta.get("verdicts_by_id", {})
 
@@ -691,7 +751,7 @@ def main():
             }
 
     # =========================================================================
-    # BƯỚC 4: PASS 5 - CHẠY VÀ CHẤM ĐIỂM FIXER AGENT (TIER 3)
+    # BƯỚC 4: PASS 5 - CHẠY VÀ CHẤM ĐIỂM FIXER + VALIDATOR + CONTROLLER (TIER 3-5)
     # =========================================================================
     fixer_metrics: dict = {}
     if args.fixer:
@@ -705,6 +765,9 @@ def main():
                 split_name=args.split,
                 fixer_model=args.fixer_model,
                 fixer_prompt=args.fixer_prompt,
+                reviewer_model=args.model,
+                reviewer_prompt=args.prompt,
+                use_rule_triage=not args.no_rule_triage,
                 max_iterations=args.max_iterations,
                 score_only=args.score_only,
             )

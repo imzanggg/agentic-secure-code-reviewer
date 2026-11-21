@@ -4,10 +4,17 @@ schemas.py
 không thuộc riêng tầng nào. Đây là "hợp đồng" giữa các tầng.
 """
 
-from typing import Optional, List, Literal
+from typing import List, Literal, Optional
 from pydantic import BaseModel, Field, model_validator
 
 CONFIDENCE_SCORE_MAP = {"low": 0.3, "medium": 0.65, "high": 0.95}
+
+LoopStatus = Literal[
+    "resolved",
+    "unresolved - suspected SAST FP",
+    "unresolved - drift detection",
+    "unresolved - max iterations exceeded",
+]
 
 
 class Finding(BaseModel):
@@ -16,6 +23,7 @@ class Finding(BaseModel):
     + ngữ cảnh code đã trích xuất (từ context_extractor).
     Đây là input chuẩn cho Reviewer Agent ở Tầng 2.
     """
+
     finding_id: str
 
     # Từ RawFinding (Tầng 1 - SAST)

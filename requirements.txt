@@ -4,3 +4,4 @@ scipy
 tree-sitter
 tree-sitter-java
 semgrep
+langgraph

@@ -15,8 +15,9 @@ from typing import List, Optional, Tuple
 from tree_sitter import Language, Parser
 import tree_sitter_java as tsjava
 
+from src.module3.schemas import Module3Patch
+from src.module4.schemas import PatchApplyResult
 from src.schemas import Finding
-from src.module3.schemas import Module3Patch, PatchApplyResult
 
 _JAVA_LANGUAGE = Language(tsjava.language())
 _TS_PARSER = Parser(_JAVA_LANGUAGE)
@@ -35,7 +36,7 @@ PLACEHOLDER_RE = re.compile(
 
 
 def extract_existing_imports(file_path: str) -> str:
-    """Đọc các dòng import hiện có ở đầu file Java để đưa vào prompt."""
+    """Đọc các dòng import hiện có ở đầu file Java."""
     path = Path(file_path)
     if not path.exists():
         return "// none"
@@ -89,10 +90,8 @@ def inject_imports(
         # Bỏ qua các import thừa do LLM liệt kê nhưng thực tế không dùng (và không phải FQN trùng)
         if used_in_code is not None and not clean.endswith(".*"):
             simple_name = clean.rsplit(".", 1)[-1]
-            # Nếu code đã viết fully-qualified khác (hoặc không nhắc tới simple_name), bỏ qua
             if not re.search(rf"\b{re.escape(simple_name)}\b", used_in_code):
                 continue
-            # Nếu code đã dùng đầy đủ package.ClassName inline, không cần import
             if clean in used_in_code:
                 continue
 

@@ -1,8 +1,8 @@
 """
 fixer.py
 Fixer Agent (Tầng 3): nhận Finding + Verdict (kèm DataFlowTrace từ Reviewer)
-và (từ vòng 2 trở đi) feedback lỗi từ Validator, sinh ra bản sửa cấp method (Method-Level Replacement)
-để patch_applier thay thế tất định qua ranh giới AST của Tree-sitter.
+và (từ vòng 2 trở đi) feedback sạch đã lọc FP từ Tầng 5,
+sinh ra bản sửa cấp method (Method-Level Replacement).
 """
 
 import re
@@ -11,9 +11,8 @@ from pathlib import Path
 from typing import Iterable, List, Optional, Tuple
 
 from src.agents.llm_client import LLMError
-from src.schemas import Finding, Verdict
-from src.module3.patch_applier import extract_existing_imports
 from src.module3.schemas import Module3Patch
+from src.schemas import Finding, Verdict
 
 THINK_BLOCK_RE = re.compile(r"<think>.*?</think>", re.IGNORECASE | re.DOTALL)
 EXPLANATION_RE = re.compile(
@@ -31,6 +30,7 @@ FIXED_RE = re.compile(
 MD_FENCE_START_RE = re.compile(r"^\s*```[a-zA-Z]*\s*\n?")
 MD_FENCE_END_RE = re.compile(r"\n?\s*```\s*$")
 FLAG_COMMENT_RE = re.compile(r"\s*//\s*<--\s*FLAGGED\b[^\n]*$", re.IGNORECASE | re.MULTILINE)
+CLASS_DECL_RE = re.compile(r"^(?:public\s+|abstract\s+|final\s+)?(?:class|interface|enum)\s+")
 
 
 def _strip_code_fences(block: str) -> str:
@@ -53,6 +53,21 @@ def _parse_imports(raw_imports: str) -> List[str]:
         if s:
             items.append(s)
     return items
+
+
+def _extract_existing_imports(file_path: str) -> str:
+    """Đọc các dòng import hiện có ở đầu file Java để đưa vào prompt."""
+    path = Path(file_path)
+    if not path.exists():
+        return "// none"
+    imports: List[str] = []
+    for line in path.read_text(encoding="utf-8", errors="replace").splitlines():
+        stripped = line.strip()
+        if stripped.startswith("import "):
+            imports.append(stripped)
+        elif CLASS_DECL_RE.match(stripped):
+            break
+    return "\n".join(imports) if imports else "// none"
 
 
 def parse_fixer_output(
@@ -230,7 +245,7 @@ class FixerAgent:
         else:
             data_flow_block = "- Data Flow Trace: not provided (infer directly from the method below)"
 
-        existing_imports = extract_existing_imports(finding.file_path)
+        existing_imports = _extract_existing_imports(finding.file_path)
 
         callee_block = (
             "READ-ONLY Callee Reference (DO NOT include or modify this in <<<FIXED>>>):\n"
